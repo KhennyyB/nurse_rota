@@ -36,4 +36,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-postinstall.js
