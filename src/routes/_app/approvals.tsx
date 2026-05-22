@@ -112,7 +112,10 @@ function dateRange(start: string, end: string): string[] {
   const cur = new Date(start + "T00:00:00");
   const endDt = new Date(end + "T00:00:00");
   while (cur <= endDt) {
-    out.push(cur.toISOString().slice(0, 10));
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, "0");
+    const d = String(cur.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${d}`);
     cur.setDate(cur.getDate() + 1);
   }
   return out;
@@ -153,7 +156,11 @@ function ApprovalsPage() {
       sixAgo.setMonth(sixAgo.getMonth() - 6);
       const threeAhead = new Date();
       threeAhead.setMonth(threeAhead.getMonth() + 3);
-      const ymd = (d: Date) => d.toISOString().slice(0, 10);
+      const ymd = (d: Date) => {
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${d.getFullYear()}-${m}-${day}`;
+      };
 
       const { data, error } = await supabase
         .from("shift_assignments")
@@ -270,6 +277,8 @@ function ApprovalsPage() {
       const { activeNurses, assignMap } = await fetchWindowData(win);
       const dates = dateRange(win.startDate, win.endDate);
 
+      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}`;
+
       const headers = [
         "Nurse",
         "Role",
@@ -288,7 +297,8 @@ function ApprovalsPage() {
       ]);
 
       const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rowData]);
+      // Title row, blank spacer row, then headers + data
+      const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
       ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
       XLSX.utils.book_append_sheet(wb, ws, "Rota");
       XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}.xlsx`);

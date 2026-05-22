@@ -67,12 +67,15 @@ function parseWards(ward: string | null): string[] {
 
 function todayYmd() {
   const t = new Date();
-  t.setHours(0, 0, 0, 0);
-  return t.toISOString().slice(0, 10);
+  const m = String(t.getMonth() + 1).padStart(2, "0");
+  const d = String(t.getDate()).padStart(2, "0");
+  return `${t.getFullYear()}-${m}-${d}`;
 }
 
 function ymd(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
 type Assignment = {

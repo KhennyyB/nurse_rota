@@ -74,7 +74,9 @@ const NURSE_CYCLE: readonly ShiftCode[] = [
 const SUPERVISOR_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "OFF"];
 
 function ymd(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
 function parseWards(ward: string | null): string[] {
