@@ -3,7 +3,16 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useState, useId } from "react";
-import { Building2, Plus, Trash2, AlertTriangle, CheckCircle2, Users, Loader2 } from "lucide-react";
+import {
+  Building2,
+  Plus,
+  Trash2,
+  AlertTriangle,
+  CheckCircle2,
+  Users,
+  Loader2,
+  Pencil,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
@@ -47,6 +56,7 @@ function WardsPage() {
   const { canManageStaff } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
+  const [editingWard, setEditingWard] = useState<Ward | null>(null);
 
   const { data: wards = [], isLoading } = useQuery({
     queryKey: ["wards"],
@@ -130,14 +140,24 @@ function WardsPage() {
                       </span>
                     )}
                     {canManageStaff && (
-                      <button
-                        type="button"
-                        aria-label={`Remove ${w.name}`}
-                        onClick={() => del(w)}
-                        className="h-7 w-7 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          aria-label={`Edit ${w.name}`}
+                          onClick={() => setEditingWard(w)}
+                          className="h-7 w-7 grid place-items-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${w.name}`}
+                          onClick={() => del(w)}
+                          className="h-7 w-7 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -162,6 +182,13 @@ function WardsPage() {
                   </div>
                 </div>
 
+                {w.patients > 10 && (
+                  <div className="mt-3 rounded-md bg-warning/15 text-warning-foreground px-3 py-2 text-xs">
+                    <strong>Morning shift:</strong> {w.patients} patients — supervisor assigned to{" "}
+                    {w.patients - 10} overflow patient{w.patients - 10 !== 1 ? "s" : ""}.
+                  </div>
+                )}
+
                 <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
                   <span className="inline-flex items-center gap-1.5">
                     <Users className="h-3.5 w-3.5" /> {w.staffed} staffed
@@ -177,6 +204,7 @@ function WardsPage() {
       )}
 
       {showAdd && <AddWardModal onClose={() => setShowAdd(false)} />}
+      {editingWard && <EditWardModal ward={editingWard} onClose={() => setEditingWard(null)} />}
     </div>
   );
 }
@@ -299,6 +327,134 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2"
           >
             {busy && <Loader2 className="h-3 w-3 animate-spin" />} Save
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({
+    name: ward.name,
+    ratio: ward.ratio ?? "",
+    min_morning_nurses: ward.min_morning_nurses,
+    min_morning_supervisor: ward.min_morning_supervisor,
+    min_morning_na: ward.min_morning_na,
+    min_night_nurses: ward.min_night_nurses,
+    min_night_supervisor: ward.min_night_supervisor,
+    min_night_na: ward.min_night_na,
+    patients: ward.patients,
+    staffed: ward.staffed,
+  });
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    const { error } = await supabase
+      .from("wards")
+      .update({ ...form, ratio: form.ratio || null })
+      .eq("id", ward.id);
+    setBusy(false);
+    if (error) return toast.error(error.message);
+    toast.success("Ward updated");
+    logAudit("Updated ward", form.name);
+    qc.invalidateQueries({ queryKey: ["wards"] });
+    onClose();
+  }
+
+  const inputCls =
+    "w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <Modal title={`Edit "${ward.name}"`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label htmlFor="edit-ward-name" className="text-sm font-medium">
+            Ward name
+          </label>
+          <input
+            id="edit-ward-name"
+            type="text"
+            required
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label htmlFor="edit-ward-ratio" className="text-sm font-medium">
+            Nurse-to-patient ratio
+          </label>
+          <input
+            id="edit-ward-ratio"
+            type="text"
+            value={form.ratio}
+            onChange={(e) => setForm({ ...form, ratio: e.target.value })}
+            placeholder="e.g. 1:8"
+            className={inputCls}
+          />
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <NumField
+            label="AM Nurses"
+            value={form.min_morning_nurses}
+            onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
+          />
+          <NumField
+            label="AM Supervisor"
+            value={form.min_morning_supervisor}
+            onChange={(v) => setForm({ ...form, min_morning_supervisor: v })}
+          />
+          <NumField
+            label="AM NA"
+            value={form.min_morning_na}
+            onChange={(v) => setForm({ ...form, min_morning_na: v })}
+          />
+          <NumField
+            label="PM Nurses"
+            value={form.min_night_nurses}
+            onChange={(v) => setForm({ ...form, min_night_nurses: v })}
+          />
+          <NumField
+            label="PM Supervisor"
+            value={form.min_night_supervisor}
+            onChange={(v) => setForm({ ...form, min_night_supervisor: v })}
+          />
+          <NumField
+            label="PM NA"
+            value={form.min_night_na}
+            onChange={(v) => setForm({ ...form, min_night_na: v })}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <NumField
+            label="Patients"
+            value={form.patients}
+            onChange={(v) => setForm({ ...form, patients: v })}
+          />
+          <NumField
+            label="Currently staffed"
+            value={form.staffed}
+            onChange={(v) => setForm({ ...form, staffed: v })}
+          />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={busy}
+            type="submit"
+            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2"
+          >
+            {busy && <Loader2 className="h-3 w-3 animate-spin" />} Save changes
           </button>
         </div>
       </form>

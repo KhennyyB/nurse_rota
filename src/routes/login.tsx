@@ -194,12 +194,6 @@ function LoginPage() {
               {mode === "login" ? "Create one" : "Sign in"}
             </button>
           </p>
-
-          <p className="text-xs text-muted-foreground mt-8 text-center">
-            <Link to="/" className="hover:underline">
-              Back to app
-            </Link>
-          </p>
         </div>
       </div>
     </div>

@@ -35,7 +35,6 @@ function ReportsPage() {
         Name: n.name,
         Role: n.role,
         Ward: n.ward ?? "",
-        Certifications: (n.certifications ?? []).join(", "),
         Hours: n.hours_this_month,
         Target: n.target_hours,
       })),

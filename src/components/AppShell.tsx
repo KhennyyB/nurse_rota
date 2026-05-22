@@ -20,23 +20,8 @@ import { cn } from "@/lib/utils";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { supabase } from "@/integrations/supabase/client";
 
-const ALL: AppRole[] = [
-  "admin",
-  "cno",
-  "chief_matron",
-  "head_nurse",
-  "ward_manager",
-  "hr_admin",
-  "nurse",
-];
-const MANAGERS: AppRole[] = [
-  "admin",
-  "cno",
-  "chief_matron",
-  "head_nurse",
-  "ward_manager",
-  "hr_admin",
-];
+const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
+const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 
 const nav = [

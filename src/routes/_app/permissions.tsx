@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
-import { Check, X, Plus, Trash2, ShieldAlert } from "lucide-react";
+import { Check, X, Plus, Trash2, ShieldAlert, Pencil, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_app/permissions")({
@@ -17,41 +17,33 @@ export const Route = createFileRoute("/_app/permissions")({
   component: PermissionsPage,
 });
 
-const ROLES: AppRole[] = [
-  "admin",
-  "cno",
-  "chief_matron",
-  "head_nurse",
-  "ward_manager",
-  "hr_admin",
-  "nurse",
-];
+const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
 
 type Capability = { key: string; label: string; roles: AppRole[] };
 
-const CAPABILITIES: Capability[] = [
+const DEFAULT_CAPABILITIES: Capability[] = [
   { key: "view_dashboard", label: "View Dashboard", roles: ROLES },
   { key: "view_rota", label: "View Rota", roles: ROLES },
   {
     key: "edit_rota",
     label: "Edit Rota (manual changes)",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "ward_manager"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse"],
   },
   {
     key: "auto_generate",
     label: "Run Auto-Schedule",
-    roles: ["admin", "cno", "chief_matron", "ward_manager"],
+    roles: ["admin", "cno", "chief_matron"],
   },
   {
     key: "manage_staff",
     label: "Manage Staff (create/edit)",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "ward_manager", "hr_admin"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
   { key: "delete_staff", label: "Delete Staff", roles: ["admin"] },
   {
     key: "manage_wards",
     label: "Manage Wards & Ratios",
-    roles: ["admin", "cno", "chief_matron", "ward_manager"],
+    roles: ["admin", "cno", "chief_matron"],
   },
   { key: "request_leave", label: "Request Leave", roles: ROLES },
   {
@@ -62,7 +54,7 @@ const CAPABILITIES: Capability[] = [
   {
     key: "submit_approval",
     label: "Submit Rota for Approval",
-    roles: ["admin", "chief_matron", "ward_manager"],
+    roles: ["admin", "chief_matron"],
   },
   {
     key: "approve_chief_matron",
@@ -80,12 +72,32 @@ const CAPABILITIES: Capability[] = [
   { key: "manage_roles", label: "Assign / Revoke Roles", roles: ["admin"] },
 ];
 
+const STORAGE_KEY = "nurse_rota_capabilities";
+
+function loadCapabilities(): Capability[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULT_CAPABILITIES;
+    const saved = JSON.parse(raw) as { key: string; roles: AppRole[] }[];
+    return DEFAULT_CAPABILITIES.map((cap) => {
+      const found = saved.find((s) => s.key === cap.key);
+      return found ? { ...cap, roles: found.roles } : cap;
+    });
+  } catch {
+    return DEFAULT_CAPABILITIES;
+  }
+}
+
 type UserRow = { id: string; email: string | null; full_name: string | null; roles: AppRole[] };
 
 function PermissionsPage() {
   const navigate = useNavigate();
   const { isAdmin, loading } = useAuth();
   const qc = useQueryClient();
+
+  const [capabilities, setCapabilities] = useState<Capability[]>(loadCapabilities);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Capability[]>([]);
 
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
@@ -129,6 +141,47 @@ function PermissionsPage() {
     qc.invalidateQueries({ queryKey: ["permissions-users"] });
   }
 
+  function startEdit() {
+    setDraft(capabilities.map((c) => ({ ...c, roles: [...c.roles] })));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setDraft([]);
+    setEditing(false);
+  }
+
+  function saveEdit() {
+    setCapabilities(draft);
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(draft.map((c) => ({ key: c.key, roles: c.roles }))),
+    );
+    setEditing(false);
+    toast.success("Permissions saved");
+  }
+
+  function resetDefaults() {
+    if (!confirm("Reset all capabilities to system defaults?")) return;
+    localStorage.removeItem(STORAGE_KEY);
+    setCapabilities(DEFAULT_CAPABILITIES);
+    setDraft([]);
+    setEditing(false);
+    toast.success("Permissions reset to defaults");
+  }
+
+  function toggleRole(capKey: string, role: AppRole) {
+    setDraft((prev) =>
+      prev.map((cap) => {
+        if (cap.key !== capKey) return cap;
+        const has = cap.roles.includes(role);
+        return { ...cap, roles: has ? cap.roles.filter((r) => r !== role) : [...cap.roles, role] };
+      }),
+    );
+  }
+
+  const activeCaps = editing ? draft : capabilities;
+
   if (!isAdmin) {
     return (
       <div className="py-20 text-center">
@@ -144,11 +197,51 @@ function PermissionsPage() {
 
       {/* Matrix */}
       <section className="rounded-xl border bg-card overflow-hidden">
-        <div className="px-5 py-4 border-b">
-          <h2 className="text-sm font-semibold">Role capability matrix</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            What each role is allowed to do in the system.
-          </p>
+        <div className="px-5 py-4 border-b flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold">Role capability matrix</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              What each role is allowed to do in the system.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveEdit}
+                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium"
+                >
+                  Save changes
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={resetDefaults}
+                  title="Reset to defaults"
+                  className="h-8 w-8 grid place-items-center rounded-md border bg-card hover:bg-muted text-muted-foreground"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </button>
+              </>
+            )}
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -163,12 +256,20 @@ function PermissionsPage() {
               </tr>
             </thead>
             <tbody>
-              {CAPABILITIES.map((cap) => (
+              {activeCaps.map((cap) => (
                 <tr key={cap.key} className="border-t">
                   <td className="px-4 py-2.5 font-medium">{cap.label}</td>
                   {ROLES.map((r) => (
                     <td key={r} className="px-3 py-2.5 text-center">
-                      {cap.roles.includes(r) ? (
+                      {editing ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`${cap.label} — ${ROLE_LABELS[r]}`}
+                          checked={cap.roles.includes(r)}
+                          onChange={() => toggleRole(cap.key, r)}
+                          className="h-4 w-4 accent-primary cursor-pointer"
+                        />
+                      ) : cap.roles.includes(r) ? (
                         <Check className="h-4 w-4 text-emerald-600 inline" />
                       ) : (
                         <X className="h-4 w-4 text-muted-foreground/40 inline" />
@@ -180,10 +281,16 @@ function PermissionsPage() {
             </tbody>
           </table>
         </div>
-        <p className="px-5 py-3 border-t text-xs text-muted-foreground">
-          Capabilities are enforced server-side by row-level security policies. To change a
-          capability's role mapping, contact engineering.
-        </p>
+        {editing ? (
+          <p className="px-5 py-3 border-t text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/20">
+            Editing mode — check or uncheck roles for each capability, then save.
+          </p>
+        ) : (
+          <p className="px-5 py-3 border-t text-xs text-muted-foreground">
+            Capabilities are enforced server-side by row-level security policies. Changes here
+            update the reference matrix.
+          </p>
+        )}
       </section>
 
       {/* User roles */}

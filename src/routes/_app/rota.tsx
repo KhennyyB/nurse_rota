@@ -11,9 +11,12 @@ import {
   Send,
   ChevronLeft,
   ChevronRight,
+  Search,
+  X,
+  Lock,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   generateSchedule,
@@ -24,6 +27,14 @@ import {
 } from "@/lib/auto-schedule";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/_app/rota")({
   head: () => ({
@@ -49,6 +60,17 @@ const shiftStyles: Record<ShiftCode, string> = {
   LEAVE: "bg-rose-100 text-rose-900 border-rose-200",
 };
 
+function parseWards(ward: string | null): string[] {
+  if (!ward) return [];
+  return ward.split("|").filter(Boolean);
+}
+
+function todayYmd() {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t.toISOString().slice(0, 10);
+}
+
 function ymd(d: Date) {
   return d.toISOString().slice(0, 10);
 }
@@ -62,22 +84,45 @@ type Assignment = {
   status: string;
 };
 
+type GenForm = {
+  startDate: string;
+  facility: string;
+  ward: string;
+};
+
 function RotaPage() {
   const { canManageStaff, hasAnyRole, user } = useAuth();
   const canEdit = canManageStaff;
-  const canGenerate = hasAnyRole(["admin", "cno", "chief_matron", "ward_manager"]);
+  const canGenerate = hasAnyRole(["admin", "cno", "chief_matron"]);
   const qc = useQueryClient();
+
+  // View state
   const [busy, setBusy] = useState(false);
-  const [startOffset, setStartOffset] = useState(0); // weeks offset
+  const [startOffset, setStartOffset] = useState(0);
   const [selectedFacility, setSelectedFacility] = useState("");
   const [selectedWard, setSelectedWard] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
+  // Generate dialog
+  const [genOpen, setGenOpen] = useState(false);
+  const [genForm, setGenForm] = useState<GenForm>({
+    startDate: todayYmd(),
+    facility: "",
+    ward: "",
+  });
+
+  // Drag — ref for event handlers (synchronous), state only for visual ring
+  const draggingRef = useRef<Assignment | null>(null);
+  const [dragging, setDragging] = useState<Assignment | null>(null);
+
+  // ── Computed dates ────────────────────────────────────────────────────────
   const startDate = useMemo(() => {
     const t = new Date();
     t.setHours(0, 0, 0, 0);
     t.setDate(t.getDate() + startOffset * 7);
     return t;
   }, [startOffset]);
+
   const endDate = useMemo(() => {
     const e = new Date(startDate);
     e.setDate(e.getDate() + DAYS - 1);
@@ -94,22 +139,26 @@ function RotaPage() {
     [startDate],
   );
 
+  // ── Data queries ─────────────────────────────────────────────────────────
   const { data: nurses = [] } = useQuery<NurseInput[]>({
     queryKey: ["nurses"],
     queryFn: async () =>
       ((await supabase.from("nurses").select("*").order("name")).data ?? []) as NurseInput[],
   });
+
   const { data: wards = [] } = useQuery<WardInput[]>({
     queryKey: ["wards"],
     queryFn: async () =>
       ((await supabase.from("wards").select("*").order("name")).data ?? []) as WardInput[],
   });
+
   const { data: leave = [] } = useQuery<LeaveInput[]>({
     queryKey: ["leave"],
     queryFn: async () =>
       ((await supabase.from("leave_requests").select("nurse_id,from_date,to_date,status")).data ??
         []) as LeaveInput[],
   });
+
   const { data: assignments = [], isLoading } = useQuery({
     queryKey: ["assignments", ymd(startDate), ymd(endDate)],
     queryFn: async () => {
@@ -123,22 +172,36 @@ function RotaPage() {
     },
   });
 
-  // Index for quick lookup
+  // ── Derived data ─────────────────────────────────────────────────────────
   const cellMap = useMemo(() => {
     const m = new Map<string, Assignment>();
     assignments.forEach((a) => m.set(`${a.nurse_id}|${a.shift_date}`, a));
     return m;
   }, [assignments]);
 
-  // Nurses filtered by selected facility and ward
+  // View: nurses filtered by toolbar selects + search
   const filteredNurses = useMemo(() => {
     let list = nurses;
     if (selectedFacility) list = list.filter((n) => n.facility === selectedFacility);
-    if (selectedWard) list = list.filter((n) => n.ward === selectedWard);
+    if (selectedWard) list = list.filter((n) => parseWards(n.ward).includes(selectedWard));
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter((n) => n.name.toLowerCase().includes(q));
+    }
     return list;
-  }, [nurses, selectedFacility, selectedWard]);
+  }, [nurses, selectedFacility, selectedWard, searchQuery]);
 
-  // Approved leave requests that conflict with non-LEAVE assignments in this window
+  // Generate dialog: wards that belong to nurses in the selected facility
+  const genWards = useMemo(() => {
+    if (!genForm.facility) return wards;
+    const wardNames = new Set(
+      nurses
+        .filter((n) => n.facility === genForm.facility && n.ward)
+        .flatMap((n) => parseWards(n.ward)),
+    );
+    return wards.filter((w) => wardNames.has(w.name));
+  }, [wards, nurses, genForm.facility]);
+
   const leaveConflicts = useMemo(() => {
     return leave
       .filter((l) => {
@@ -156,44 +219,74 @@ function RotaPage() {
       }));
   }, [leave, days, cellMap, nurses]);
 
+  // True when the current 28-day window contains any published assignments.
+  // Published windows are fully read-only: all cells and actions are locked.
+  const isWindowPublished = useMemo(
+    () => assignments.some((a) => a.status === "published"),
+    [assignments],
+  );
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  function openGenDialog() {
+    setGenForm({ startDate: ymd(startDate), facility: "", ward: "" });
+    setGenOpen(true);
+  }
+
   async function handleGenerate() {
-    if (!selectedFacility) return toast.error("Select a facility before generating");
-    if (!filteredNurses.length) return toast.error("No staff found for the selected facility/ward");
+    if (!genForm.facility) {
+      toast.error("Select a facility");
+      return;
+    }
+
+    const genStart = new Date(genForm.startDate + "T00:00:00");
+    const genEnd = new Date(genStart);
+    genEnd.setDate(genEnd.getDate() + DAYS - 1);
+
+    let targetNurses = nurses.filter((n) => n.facility === genForm.facility);
+    if (genForm.ward)
+      targetNurses = targetNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
+
+    if (!targetNurses.length) {
+      toast.error("No staff found for the selected facility / ward");
+      return;
+    }
+
+    setGenOpen(false);
     setBusy(true);
     try {
       const draft = generateSchedule({
-        nurses: filteredNurses,
+        nurses: targetNurses,
         wards,
         leave,
-        startDate,
+        startDate: genStart,
         days: DAYS,
       });
-      // Clear existing draft window
+
       await supabase
         .from("shift_assignments")
         .delete()
-        .gte("shift_date", ymd(startDate))
-        .lte("shift_date", ymd(endDate))
+        .gte("shift_date", ymd(genStart))
+        .lte("shift_date", ymd(genEnd))
         .neq("status", "published");
 
-      // Insert in chunks
       const rows = draft.map((d) => ({
         ...d,
         created_by: user?.id ?? null,
         status: "draft" as const,
       }));
       for (let i = 0; i < rows.length; i += 500) {
-        const slice = rows.slice(i, i + 500);
-        const { error } = await supabase.from("shift_assignments").insert(slice);
+        const { error } = await supabase.from("shift_assignments").insert(rows.slice(i, i + 500));
         if (error) throw error;
       }
+
       await supabase.from("audit_logs").insert({
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Generated 28-day rota draft",
-        target: `${ymd(startDate)} → ${ymd(endDate)}`,
+        target: `${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""} · ${ymd(genStart)} → ${ymd(genEnd)}`,
       });
-      toast.success("28-day draft generated");
+
+      toast.success(`28-day draft generated for ${genForm.facility}`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
@@ -217,7 +310,7 @@ function RotaPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  async function handleSubmit() {
+  async function handleSubmitRota() {
     setBusy(true);
     const { error } = await supabase
       .from("shift_assignments")
@@ -240,6 +333,7 @@ function RotaPage() {
   async function cycleCell(nurseId: string, dateStr: string, ward: string | null) {
     if (!canEdit) return;
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
+    if (isWindowPublished || existing?.status === "published") return;
     const next = existing
       ? SHIFT_CYCLE[(SHIFT_CYCLE.indexOf(existing.shift) + 1) % SHIFT_CYCLE.length]
       : "M";
@@ -265,28 +359,24 @@ function RotaPage() {
 
   async function swapCells(a: Assignment, b: Assignment) {
     if (!canEdit) return;
+    if (isWindowPublished || a.status === "published" || b.status === "published") return;
     if (a.shift_date !== b.shift_date)
       return toast.error("You can only swap shifts on the same day");
-    const { error: e1 } = await supabase
-      .from("shift_assignments")
-      .update({ shift: b.shift })
-      .eq("id", a.id);
-    const { error: e2 } = await supabase
-      .from("shift_assignments")
-      .update({ shift: a.shift })
-      .eq("id", b.id);
+    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+      supabase.from("shift_assignments").update({ shift: b.shift }).eq("id", a.id),
+      supabase.from("shift_assignments").update({ shift: a.shift }).eq("id", b.id),
+    ]);
     if (e1 || e2) return toast.error((e1 ?? e2)!.message);
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
       action: "Swapped shifts",
-      target: `${a.shift_date}`,
+      target: a.shift_date,
     });
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  const [dragging, setDragging] = useState<Assignment | null>(null);
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div>
       <PageHeader
@@ -294,7 +384,9 @@ function RotaPage() {
         subtitle={`28-day view · ${days[0].toLocaleDateString()} → ${days[DAYS - 1].toLocaleDateString()}`}
       />
 
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      {/* Toolbar row 1 */}
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        {/* Week nav */}
         <div className="inline-flex rounded-md border bg-card">
           <button
             type="button"
@@ -321,6 +413,7 @@ function RotaPage() {
           </button>
         </div>
 
+        {/* Facility filter */}
         <select
           title="Facility"
           value={selectedFacility}
@@ -336,6 +429,7 @@ function RotaPage() {
           ))}
         </select>
 
+        {/* Ward filter */}
         <select
           title="Ward"
           value={selectedWard}
@@ -348,39 +442,72 @@ function RotaPage() {
           ))}
         </select>
 
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="search"
+            placeholder="Search nurse…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-9 pl-8 pr-7 w-44 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
         <div className="flex-1" />
-        {canGenerate && (
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={busy}
-            className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
-          >
-            <Wand2 className="h-4 w-4" /> Auto-generate
-          </button>
-        )}
-        {canEdit && (
-          <button
-            type="button"
-            onClick={handleClear}
-            disabled={busy}
-            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-          >
-            <Trash2 className="h-4 w-4" /> Clear draft
-          </button>
-        )}
-        {canEdit && (
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={busy}
-            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-          >
-            <Send className="h-4 w-4" /> Submit for approval
-          </button>
+
+        {/* Actions */}
+        {isWindowPublished ? (
+          <span className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-medium dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-400">
+            <Lock className="h-3.5 w-3.5" /> Published — read only
+          </span>
+        ) : (
+          <>
+            {canGenerate && (
+              <button
+                type="button"
+                onClick={openGenDialog}
+                disabled={busy}
+                className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Wand2 className="h-4 w-4" /> Auto-generate
+              </button>
+            )}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={handleClear}
+                disabled={busy}
+                className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" /> Clear draft
+              </button>
+            )}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={handleSubmitRota}
+                disabled={busy}
+                className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+              >
+                <Send className="h-4 w-4" /> Submit for approval
+              </button>
+            )}
+          </>
         )}
       </div>
 
+      {/* Leave conflict warning */}
       {leaveConflicts.length > 0 && (
         <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-950/30">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
@@ -401,20 +528,33 @@ function RotaPage() {
 
       <Legend />
 
+      {/* Rota table */}
       {isLoading ? (
         <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
       ) : filteredNurses.length === 0 ? (
         <EmptyState
           icon={<CalendarDays className="h-6 w-6" />}
-          title="No nurses to schedule"
-          description="Add staff before generating a rota."
+          title={searchQuery ? "No nurses match your search" : "No nurses to schedule"}
+          description={
+            searchQuery ? `No results for "${searchQuery}".` : "Add staff before generating a rota."
+          }
           action={
-            <Link
-              to="/staff"
-              className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
-            >
-              <Users className="h-4 w-4" /> Manage staff
-            </Link>
+            searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md border text-sm hover:bg-muted"
+              >
+                <X className="h-4 w-4" /> Clear search
+              </button>
+            ) : (
+              <Link
+                to="/staff"
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
+              >
+                <Users className="h-4 w-4" /> Manage staff
+              </Link>
+            )
           }
         />
       ) : (
@@ -426,7 +566,7 @@ function RotaPage() {
                   <th className="text-left font-semibold px-3 py-3 sticky left-0 bg-muted/50 z-10 min-w-40">
                     Nurse
                   </th>
-                  <th className="text-left font-semibold px-2 py-3 min-w-27.5">Ward</th>
+                  <th className="text-left font-semibold px-2 py-3 min-w-24">Ward</th>
                   {days.map((dt) => (
                     <th
                       key={ymd(dt)}
@@ -450,10 +590,26 @@ function RotaPage() {
                       <div className="font-medium">{n.name}</div>
                       <div className="text-[11px] text-muted-foreground">{n.role}</div>
                     </td>
-                    <td className="px-2 py-2 text-muted-foreground text-xs">{n.ward ?? "—"}</td>
+                    <td className="px-2 py-2 text-muted-foreground text-xs">
+                      {(() => {
+                        const ws = parseWards(n.ward);
+                        if (!ws.length) return "—";
+                        return (
+                          <>
+                            {ws[0]}
+                            {ws.length > 1 && (
+                              <span className="ml-0.5 text-[10px] opacity-60">
+                                +{ws.length - 1}
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </td>
                     {days.map((dt) => {
                       const dateStr = ymd(dt);
                       const cell = cellMap.get(`${n.id}|${dateStr}`);
+                      // Visual-only: uses state (safe to lag one render behind)
                       const isDragOver =
                         dragging &&
                         dragging.shift_date === dateStr &&
@@ -463,17 +619,37 @@ function RotaPage() {
                         <td key={dateStr} className="px-0.5 py-1 text-center">
                           <button
                             type="button"
+                            draggable={!!cell && canEdit && !isWindowPublished}
                             onClick={() => cycleCell(n.id, dateStr, n.ward)}
-                            draggable={!!cell && canEdit}
-                            onDragStart={() => cell && setDragging(cell)}
-                            onDragEnd={() => setDragging(null)}
+                            onDragStart={(e) => {
+                              if (!cell || !canEdit || isWindowPublished) return;
+                              // Write to ref immediately — visible to all handlers this frame
+                              draggingRef.current = cell;
+                              setDragging(cell);
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", cell.id);
+                            }}
+                            onDragEnd={() => {
+                              draggingRef.current = null;
+                              setDragging(null);
+                            }}
                             onDragOver={(e) => {
-                              if (isDragOver) e.preventDefault();
+                              if (isWindowPublished) return;
+                              // Use ref — guaranteed current even before React re-renders
+                              const src = draggingRef.current;
+                              if (src && cell && src.id !== cell.id && src.shift_date === dateStr) {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = "move";
+                              }
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              if (dragging && cell && dragging.id !== cell.id)
-                                swapCells(dragging, cell);
+                              if (isWindowPublished) return;
+                              const src = draggingRef.current;
+                              if (src && cell && src.id !== cell.id) {
+                                swapCells(src, cell);
+                              }
+                              draggingRef.current = null;
                               setDragging(null);
                             }}
                             className={cn(
@@ -481,13 +657,20 @@ function RotaPage() {
                               cell
                                 ? shiftStyles[cell.shift]
                                 : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
-                              isDragOver && "ring-2 ring-primary",
-                              !canEdit && "cursor-not-allowed",
+                              isDragOver && !isWindowPublished && "ring-2 ring-primary scale-105",
+                              dragging && dragging.id === cell?.id && "opacity-40",
+                              isWindowPublished
+                                ? "cursor-not-allowed opacity-80"
+                                : !canEdit
+                                  ? "cursor-default"
+                                  : "",
                             )}
                             title={
-                              canEdit
-                                ? "Click to cycle · drag to swap with same-day shift"
-                                : "View only"
+                              isWindowPublished
+                                ? "Published — this schedule is locked"
+                                : canEdit
+                                  ? "Click to cycle · drag to swap with same-day shift"
+                                  : "View only"
                             }
                           >
                             {cell?.shift ?? "—"}
@@ -502,8 +685,13 @@ function RotaPage() {
           </div>
           <div className="p-4 text-xs text-muted-foreground border-t flex items-center justify-between">
             <span>
-              Click a cell to cycle shifts · Drag a shift onto another nurse's same-day cell to
-              swap.
+              {isWindowPublished ? (
+                <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                  <Lock className="h-3 w-3" /> Published schedule — read only
+                </span>
+              ) : (
+                "Click a cell to cycle shifts · Drag a shift onto another nurse's same-day cell to swap."
+              )}
             </span>
             <span>
               {filteredNurses.length} staff ·{" "}
@@ -513,6 +701,86 @@ function RotaPage() {
           </div>
         </div>
       )}
+
+      {/* Auto-generate dialog */}
+      <Dialog open={genOpen} onOpenChange={setGenOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Generate 28-day schedule</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Start date */}
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Start date</label>
+              <input
+                type="date"
+                title="Schedule start date"
+                value={genForm.startDate}
+                onChange={(e) => setGenForm((f) => ({ ...f, startDate: e.target.value }))}
+                className="w-full h-9 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Schedule runs {DAYS} days from this date.
+              </p>
+            </div>
+
+            {/* Facility */}
+            <div>
+              <label className="block text-sm font-medium mb-1.5">
+                Facility <span className="text-destructive">*</span>
+              </label>
+              <select
+                title="Facility"
+                value={genForm.facility}
+                onChange={(e) => setGenForm((f) => ({ ...f, facility: e.target.value, ward: "" }))}
+                className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Select facility…</option>
+                {FACILITIES.map((f) => (
+                  <option key={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Ward */}
+            <div>
+              <label className="block text-sm font-medium mb-1.5">
+                Ward <span className="text-destructive">*</span>
+              </label>
+              <select
+                title="Ward"
+                value={genForm.ward}
+                onChange={(e) => setGenForm((f) => ({ ...f, ward: e.target.value }))}
+                disabled={!genForm.facility}
+                className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="">Select ward…</option>
+                {genWards.map((w) => (
+                  <option key={w.name}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <button type="button" className="h-9 px-4 rounded-md border text-sm hover:bg-muted">
+                Cancel
+              </button>
+            </DialogClose>
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={!genForm.facility || !genForm.ward || !genForm.startDate || busy}
+              className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <Wand2 className="h-4 w-4" />
+              Generate
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

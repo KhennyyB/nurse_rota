@@ -19,6 +19,9 @@ dist-ssr
 .env.*.local
 
 
+# Netlify
+.netlify/
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
@@ -33,3 +36,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+postinstall.js

@@ -2,8 +2,18 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useRef, useState } from "react";
-import { UserPlus, Search, Upload, Trash2, Users, FileSpreadsheet, X, Loader2 } from "lucide-react";
+import { useRef, useState, type FormEvent } from "react";
+import {
+  UserPlus,
+  Search,
+  Upload,
+  Trash2,
+  Users,
+  FileSpreadsheet,
+  X,
+  Loader2,
+  Pencil,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
@@ -36,13 +46,31 @@ const FACILITIES = [
   "Wellness",
 ] as const;
 
+const NURSE_ROLES = [
+  "Nurse",
+  "Head Nurse",
+  "Intern Nurse",
+  "Nursing Assistant",
+  "Surgical Nurse",
+  "Porter",
+] as const;
+
+function parseWards(ward: string | null): string[] {
+  if (!ward) return [];
+  return ward.split("|").filter(Boolean);
+}
+
+function formatWards(wards: string[]): string | null {
+  const f = wards.filter(Boolean);
+  return f.length ? f.join("|") : null;
+}
+
 type Nurse = {
   id: string;
   name: string;
   role: string;
   facility: string | null;
   ward: string | null;
-  certifications: string[];
   hours_this_month: number;
   target_hours: number;
 };
@@ -53,6 +81,7 @@ function StaffPage() {
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [editingNurse, setEditingNurse] = useState<Nurse | null>(null);
 
   const { data: nurses = [], isLoading } = useQuery({
     queryKey: ["nurses"],
@@ -66,7 +95,7 @@ function StaffPage() {
     },
   });
 
-  const { data: wards = [] } = useQuery({
+  const { data: wards = [] } = useQuery<{ name: string }[]>({
     queryKey: ["wards"],
     queryFn: async () => (await supabase.from("wards").select("name").order("name")).data ?? [],
   });
@@ -85,11 +114,13 @@ function StaffPage() {
   });
 
   const filtered = nurses.filter((n) =>
-    [n.name, n.role, n.facility ?? "", n.ward ?? ""]
+    [n.name, n.role, n.facility ?? "", ...parseWards(n.ward)]
       .join(" ")
       .toLowerCase()
       .includes(search.toLowerCase()),
   );
+
+  const wardNames = wards.map((w) => w.name);
 
   return (
     <div>
@@ -177,9 +208,6 @@ function StaffPage() {
                     Facility
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
-                  <th className="text-left font-semibold px-4 py-3 hidden md:table-cell">
-                    Certifications
-                  </th>
                   <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">Hours</th>
                   {canManageStaff && <th className="px-4 py-3"></th>}
                 </tr>
@@ -203,34 +231,34 @@ function StaffPage() {
                     <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
                       {n.facility ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">{n.ward ?? "—"}</td>
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      <div className="flex gap-1 flex-wrap">
-                        {n.certifications.map((c) => (
-                          <span
-                            key={c}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground font-medium"
-                          >
-                            {c}
-                          </span>
-                        ))}
-                      </div>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {parseWards(n.ward).join(", ") || "—"}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
                       {n.hours_this_month}/{n.target_hours}
                     </td>
                     {canManageStaff && (
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          aria-label={`Remove ${n.name}`}
-                          onClick={() => {
-                            if (confirm(`Remove ${n.name}?`)) delMut.mutate(n.id);
-                          }}
-                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            aria-label={`Edit ${n.name}`}
+                            onClick={() => setEditingNurse(n)}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${n.name}`}
+                            onClick={() => {
+                              if (confirm(`Remove ${n.name}?`)) delMut.mutate(n.id);
+                            }}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -241,10 +269,87 @@ function StaffPage() {
         </div>
       )}
 
-      {showAdd && (
-        <AddNurseModal onClose={() => setShowAdd(false)} wards={wards.map((w) => w.name)} />
+      {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wardNames} />}
+      {editingNurse && (
+        <EditNurseModal
+          nurse={editingNurse}
+          wards={wardNames}
+          onClose={() => setEditingNurse(null)}
+        />
       )}
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
+    </div>
+  );
+}
+
+function WardMultiField({
+  selectedWards,
+  allWards,
+  onChange,
+}: {
+  selectedWards: string[];
+  allWards: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const available = allWards.filter((w) => !selectedWards.includes(w));
+
+  return (
+    <div>
+      <p className="text-sm font-medium">
+        Wards <span className="text-xs font-normal text-muted-foreground">(max 3)</span>
+      </p>
+      {selectedWards.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1.5">
+          {selectedWards.map((w, i) => (
+            <span
+              key={w}
+              className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2.5 py-1 rounded-full"
+            >
+              {i === 0 && (
+                <span className="text-[9px] uppercase tracking-wide opacity-60 mr-0.5">
+                  primary
+                </span>
+              )}
+              {w}
+              <button
+                type="button"
+                onClick={() => onChange(selectedWards.filter((x) => x !== w))}
+                className="hover:text-destructive"
+                aria-label={`Remove ${w}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {selectedWards.length < 3 &&
+        (allWards.length > 0 ? (
+          <select
+            title="Add ward"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) onChange([...selectedWards, e.target.value]);
+            }}
+            className={inputCls + " mt-1.5"}
+          >
+            <option value="" disabled>
+              {selectedWards.length === 0 ? "Select primary ward…" : "Add another ward…"}
+            </option>
+            {available.map((w) => (
+              <option key={w}>{w}</option>
+            ))}
+            {available.length === 0 && (
+              <option value="" disabled>
+                All wards assigned
+              </option>
+            )}
+          </select>
+        ) : (
+          <p className="text-xs text-muted-foreground mt-1.5">
+            No wards configured. Add wards first.
+          </p>
+        ))}
     </div>
   );
 }
@@ -254,20 +359,15 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
   const [name, setName] = useState("");
   const [role, setRole] = useState("Nurse");
   const [facility, setFacility] = useState("");
-  const [ward, setWard] = useState(wards[0] ?? "");
-  const [certs, setCerts] = useState("");
+  const [nurseWards, setNurseWards] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
+  async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const certifications = certs
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
     const { error } = await supabase
       .from("nurses")
-      .insert({ name, role, facility: facility || null, ward: ward || null, certifications });
+      .insert({ name, role, facility: facility || null, ward: formatWards(nurseWards) });
     setBusy(false);
     if (error) return toast.error(error.message);
     toast.success("Nurse added");
@@ -298,14 +398,7 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             onChange={(e) => setRole(e.target.value)}
             className={inputCls}
           >
-            {[
-              "Nurse",
-              "Head Nurse",
-              "Ward Manager",
-              "Intern Nurse",
-              "Nursing Assistant",
-              "Porter",
-            ].map((r) => (
+            {NURSE_ROLES.map((r) => (
               <option key={r}>{r}</option>
             ))}
           </select>
@@ -324,41 +417,7 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             ))}
           </select>
         </Field>
-        <Field id="nurse-ward" label="Ward">
-          {wards.length === 0 ? (
-            <input
-              type="text"
-              aria-label="Ward"
-              value={ward}
-              onChange={(e) => setWard(e.target.value)}
-              placeholder="Type ward name"
-              className={inputCls}
-            />
-          ) : (
-            <select
-              id="nurse-ward"
-              title="Ward"
-              value={ward}
-              onChange={(e) => setWard(e.target.value)}
-              className={inputCls}
-            >
-              <option value="">— Unassigned —</option>
-              {wards.map((w) => (
-                <option key={w}>{w}</option>
-              ))}
-            </select>
-          )}
-        </Field>
-        <Field id="nurse-certs" label="Certifications" hint="Comma-separated (e.g. BLS, ACLS)">
-          <input
-            id="nurse-certs"
-            type="text"
-            placeholder="e.g. BLS, ACLS"
-            value={certs}
-            onChange={(e) => setCerts(e.target.value)}
-            className={inputCls}
-          />
-        </Field>
+        <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
@@ -380,13 +439,105 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
   );
 }
 
+function EditNurseModal({
+  nurse,
+  onClose,
+  wards,
+}: {
+  nurse: Nurse;
+  onClose: () => void;
+  wards: string[];
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(nurse.name);
+  const [role, setRole] = useState(nurse.role);
+  const [facility, setFacility] = useState(nurse.facility ?? "");
+  const [nurseWards, setNurseWards] = useState<string[]>(parseWards(nurse.ward));
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    const { error } = await supabase
+      .from("nurses")
+      .update({ name, role, facility: facility || null, ward: formatWards(nurseWards) })
+      .eq("id", nurse.id);
+    setBusy(false);
+    if (error) return toast.error(error.message);
+    toast.success("Profile updated");
+    logAudit("Updated nurse profile", name);
+    qc.invalidateQueries({ queryKey: ["nurses"] });
+    onClose();
+  }
+
+  return (
+    <Modal title="Edit nurse" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <Field id="edit-name" label="Full name">
+          <input
+            id="edit-name"
+            type="text"
+            required
+            placeholder="Enter full name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className={inputCls}
+          />
+        </Field>
+        <Field id="edit-role" label="Role">
+          <select
+            id="edit-role"
+            title="Role"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className={inputCls}
+          >
+            {NURSE_ROLES.map((r) => (
+              <option key={r}>{r}</option>
+            ))}
+          </select>
+        </Field>
+        <Field id="edit-facility" label="Facility">
+          <select
+            id="edit-facility"
+            title="Facility"
+            value={facility}
+            onChange={(e) => setFacility(e.target.value)}
+            className={inputCls}
+          >
+            <option value="">— Unassigned —</option>
+            {FACILITIES.map((f) => (
+              <option key={f}>{f}</option>
+            ))}
+          </select>
+        </Field>
+        <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={busy}
+            type="submit"
+            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2"
+          >
+            {busy && <Loader2 className="h-3 w-3 animate-spin" />} Save changes
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function UploadModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
-  const [rows, setRows] = useState<
-    { name: string; role: string; ward: string; certifications: string[] }[]
-  >([]);
+  const [rows, setRows] = useState<{ name: string; role: string; ward: string }[]>([]);
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -404,17 +555,10 @@ function UploadModal({ onClose }: { onClose: () => void }) {
             for (const n of names) if (keys[n]) return String(r[keys[n]] ?? "").trim();
             return "";
           };
-          const certsRaw = get("certifications", "certs", "certification");
           return {
             name: get("name", "full name", "nurse"),
             role: get("role", "position") || "Nurse",
             ward: get("ward", "department", "unit"),
-            certifications: certsRaw
-              ? certsRaw
-                  .split(/[,;|]/)
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-              : [],
           };
         })
         .filter((r) => r.name);
@@ -436,7 +580,6 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         role: r.role,
         facility,
         ward: r.ward || null,
-        certifications: r.certifications,
       })),
     );
     setBusy(false);
@@ -469,8 +612,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         <p className="text-sm text-muted-foreground">
           Upload an <code className="text-foreground">.xlsx</code> or{" "}
           <code className="text-foreground">.csv</code> with headers: <strong>Name</strong>,{" "}
-          <strong>Role</strong>, <strong>Ward</strong> (and optional <strong>Certifications</strong>
-          ).
+          <strong>Role</strong>, <strong>Ward</strong>.
         </p>
         <input
           ref={fileRef}
