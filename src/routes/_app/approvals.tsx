@@ -9,6 +9,7 @@ import {
   BookOpen,
   FileSpreadsheet,
   FileDown,
+  Undo2,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -17,7 +18,6 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -147,6 +147,7 @@ function ApprovalsPage() {
   const canApproveCNO = hasAnyRole(["admin", "cno"]);
   const canPublish = hasAnyRole(["admin", "cno"]);
   const canSubmit = hasAnyRole(["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]);
+  const canRevertPublished = hasAnyRole(["admin"]);
 
   // Fetch all assignment windows (all statuses, bounded to ±6 months for performance)
   const { data: rows = [], isLoading } = useQuery({
@@ -242,6 +243,33 @@ function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
+  async function revertPublished(win: RotaWindow) {
+    if (
+      !confirm(
+        "Revert this published rota back to 'Approved (CNO)' status?\n\nThis will unlock the rota for further edits and re-submission.",
+      )
+    )
+      return;
+    setBusy(win.startDate);
+    const { error } = await supabase
+      .from("shift_assignments")
+      .update({ status: "approved_cno" })
+      .gte("shift_date", win.startDate)
+      .lte("shift_date", win.endDate)
+      .eq("status", "published");
+    setBusy(null);
+    if (error) return toast.error(error.message);
+    await supabase.from("audit_logs").insert({
+      actor_id: user?.id,
+      actor_name: user?.email ?? null,
+      action: "Reverted published rota to Approved (CNO)",
+      target: `${win.startDate} → ${win.endDate}`,
+    });
+    toast.success("Rota reverted — it is now editable again");
+    qc.invalidateQueries({ queryKey: ["approvals"] });
+    qc.invalidateQueries({ queryKey: ["assignments"] });
+  }
+
   // Fetch full rota data for a published window (used by both downloads)
   async function fetchWindowData(win: RotaWindow) {
     const [nursesRes, assignRes] = await Promise.all([
@@ -274,7 +302,10 @@ function ApprovalsPage() {
   async function handleDownloadExcel(win: RotaWindow) {
     setDownloading(win.startDate + "-xlsx");
     try {
-      const { activeNurses, assignMap } = await fetchWindowData(win);
+      const [XLSX, { activeNurses, assignMap }] = await Promise.all([
+        import("xlsx"),
+        fetchWindowData(win),
+      ]);
       const dates = dateRange(win.startDate, win.endDate);
 
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}`;
@@ -564,9 +595,20 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       </button>
                     )}
 
-                    {/* Published: downloads */}
+                    {/* Published: revert (admin only) + downloads */}
                     {win.status === "published" && (
                       <>
+                        {canRevertPublished && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => revertPublished(win)}
+                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                            title="Admin only — unlocks this rota for further edits"
+                          >
+                            <Undo2 className="h-3.5 w-3.5" /> Revert to Approved (CNO)
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={!!isDownloading}

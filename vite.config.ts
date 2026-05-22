@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import tsconfigPaths from "vite-tsconfig-paths";
-import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 
 export default defineConfig(({ mode }) => {
   const loadedEnv = loadEnv(mode, process.cwd(), "VITE_");
@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [
-      TanStackRouterVite({ autoCodeSplitting: true }),
+      tanstackRouter({ autoCodeSplitting: true }),
       tailwindcss(),
       tsconfigPaths({ projects: ["./tsconfig.json"] }),
       react(),
@@ -31,6 +31,20 @@ export default defineConfig(({ mode }) => {
         "@tanstack/react-query",
         "@tanstack/query-core",
       ],
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            "vendor-tanstack": [
+              "@tanstack/react-router",
+              "@tanstack/react-query",
+              "@tanstack/query-core",
+            ],
+            "vendor-supabase": ["@supabase/supabase-js"],
+          },
+        },
+      },
     },
     server: {
       host: "::",

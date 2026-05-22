@@ -22,39 +22,46 @@ const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admi
 type Capability = { key: string; label: string; roles: AppRole[] };
 
 const DEFAULT_CAPABILITIES: Capability[] = [
+  // ── Dashboard & Rota ──────────────────────────────────────────────────────
   { key: "view_dashboard", label: "View Dashboard", roles: ROLES },
   { key: "view_rota", label: "View Rota", roles: ROLES },
   {
     key: "edit_rota",
-    label: "Edit Rota (manual changes)",
-    roles: ["admin", "cno", "chief_matron", "head_nurse"],
+    label: "Edit Rota (manual cell changes)",
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
   {
     key: "auto_generate",
     label: "Run Auto-Schedule",
     roles: ["admin", "cno", "chief_matron"],
   },
+
+  // ── Staff & Wards ─────────────────────────────────────────────────────────
   {
     key: "manage_staff",
-    label: "Manage Staff (create/edit)",
+    label: "Manage Staff (create / edit)",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
   { key: "delete_staff", label: "Delete Staff", roles: ["admin"] },
   {
     key: "manage_wards",
-    label: "Manage Wards & Ratios",
-    roles: ["admin", "cno", "chief_matron"],
+    label: "Manage Wards & Staffing Ratios",
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
+
+  // ── Leave ─────────────────────────────────────────────────────────────────
   { key: "request_leave", label: "Request Leave", roles: ROLES },
   {
     key: "approve_leave",
-    label: "Approve Leave",
+    label: "Approve / Reject Leave",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
+
+  // ── Approval workflow ────────────────────────────────────────────────────
   {
     key: "submit_approval",
     label: "Submit Rota for Approval",
-    roles: ["admin", "chief_matron"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
   {
     key: "approve_chief_matron",
@@ -63,6 +70,18 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   { key: "approve_cno", label: "CNO Approval Step", roles: ["admin", "cno"] },
   { key: "publish_rota", label: "Publish Rota", roles: ["admin", "cno"] },
+  {
+    key: "revert_published",
+    label: "Revert Published Rota to Draft",
+    roles: ["admin"],
+  },
+  {
+    key: "download_rota",
+    label: "Download Published Rota (Excel / PDF)",
+    roles: ROLES,
+  },
+
+  // ── Reports, Audit & Access ───────────────────────────────────────────────
   {
     key: "view_reports",
     label: "View Reports",
