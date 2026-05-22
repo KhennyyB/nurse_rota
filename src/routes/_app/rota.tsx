@@ -14,6 +14,7 @@ import {
   Search,
   X,
   Lock,
+  Clock,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { useMemo, useRef, useState } from "react";
@@ -222,12 +223,18 @@ function RotaPage() {
       }));
   }, [leave, days, cellMap, nurses]);
 
-  // True when the current 28-day window contains any published assignments.
-  // Published windows are fully read-only: all cells and actions are locked.
-  const isWindowPublished = useMemo(
-    () => assignments.some((a) => a.status === "published"),
-    [assignments],
-  );
+  // Derive the dominant lock status for the visible window.
+  // Any status other than "draft" locks all editing and toolbar actions.
+  // The lock lifts only when the rota is returned to "draft" via Approvals.
+  const windowLockStatus = useMemo(() => {
+    if (assignments.some((a) => a.status === "published")) return "published" as const;
+    if (assignments.some((a) => a.status === "approved_cno")) return "approved_cno" as const;
+    if (assignments.some((a) => a.status === "approved_chief")) return "approved_chief" as const;
+    if (assignments.some((a) => a.status === "submitted")) return "submitted" as const;
+    return "draft" as const;
+  }, [assignments]);
+
+  const isWindowLocked = windowLockStatus !== "draft";
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
@@ -336,7 +343,7 @@ function RotaPage() {
   async function cycleCell(nurseId: string, dateStr: string, ward: string | null) {
     if (!canEdit) return;
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
-    if (isWindowPublished || existing?.status === "published") return;
+    if (isWindowLocked || existing?.status === "published") return;
     const next = existing
       ? SHIFT_CYCLE[(SHIFT_CYCLE.indexOf(existing.shift) + 1) % SHIFT_CYCLE.length]
       : "M";
@@ -362,7 +369,7 @@ function RotaPage() {
 
   async function swapCells(a: Assignment, b: Assignment) {
     if (!canEdit) return;
-    if (isWindowPublished || a.status === "published" || b.status === "published") return;
+    if (isWindowLocked || a.status === "published" || b.status === "published") return;
     if (a.shift_date !== b.shift_date)
       return toast.error("You can only swap shifts on the same day");
     const [{ error: e1 }, { error: e2 }] = await Promise.all([
@@ -470,9 +477,28 @@ function RotaPage() {
         <div className="flex-1" />
 
         {/* Actions */}
-        {isWindowPublished ? (
-          <span className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-medium dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-400">
-            <Lock className="h-3.5 w-3.5" /> Published — read only
+        {isWindowLocked ? (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
+              windowLockStatus === "published"
+                ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-400"
+                : windowLockStatus === "approved_cno"
+                  ? "border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-400"
+                  : windowLockStatus === "approved_chief"
+                    ? "border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:border-blue-700 dark:text-blue-400"
+                    : "border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-400",
+            )}
+          >
+            {windowLockStatus === "published" ? (
+              <Lock className="h-3.5 w-3.5" />
+            ) : (
+              <Clock className="h-3.5 w-3.5" />
+            )}
+            {windowLockStatus === "published" && "Published — read only"}
+            {windowLockStatus === "approved_cno" && "Approved (CNO) — awaiting publication"}
+            {windowLockStatus === "approved_chief" && "Approved (Chief Matron) — awaiting CNO"}
+            {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
           </span>
         ) : (
           <>
@@ -622,10 +648,10 @@ function RotaPage() {
                         <td key={dateStr} className="px-0.5 py-1 text-center">
                           <button
                             type="button"
-                            draggable={!!cell && canEdit && !isWindowPublished}
+                            draggable={!!cell && canEdit && !isWindowLocked}
                             onClick={() => cycleCell(n.id, dateStr, n.ward)}
                             onDragStart={(e) => {
-                              if (!cell || !canEdit || isWindowPublished) return;
+                              if (!cell || !canEdit || isWindowLocked) return;
                               // Write to ref immediately — visible to all handlers this frame
                               draggingRef.current = cell;
                               setDragging(cell);
@@ -637,7 +663,7 @@ function RotaPage() {
                               setDragging(null);
                             }}
                             onDragOver={(e) => {
-                              if (isWindowPublished) return;
+                              if (isWindowLocked) return;
                               // Use ref — guaranteed current even before React re-renders
                               const src = draggingRef.current;
                               if (src && cell && src.id !== cell.id && src.shift_date === dateStr) {
@@ -647,7 +673,7 @@ function RotaPage() {
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              if (isWindowPublished) return;
+                              if (isWindowLocked) return;
                               const src = draggingRef.current;
                               if (src && cell && src.id !== cell.id) {
                                 swapCells(src, cell);
@@ -660,17 +686,19 @@ function RotaPage() {
                               cell
                                 ? shiftStyles[cell.shift]
                                 : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
-                              isDragOver && !isWindowPublished && "ring-2 ring-primary scale-105",
+                              isDragOver && !isWindowLocked && "ring-2 ring-primary scale-105",
                               dragging && dragging.id === cell?.id && "opacity-40",
-                              isWindowPublished
+                              isWindowLocked
                                 ? "cursor-not-allowed opacity-80"
                                 : !canEdit
                                   ? "cursor-default"
                                   : "",
                             )}
                             title={
-                              isWindowPublished
-                                ? "Published — this schedule is locked"
+                              isWindowLocked
+                                ? windowLockStatus === "published"
+                                  ? "Published — this schedule is locked"
+                                  : "Submitted for approval — return to draft to edit"
                                 : canEdit
                                   ? "Click to cycle · drag to swap with same-day shift"
                                   : "View only"
@@ -688,9 +716,31 @@ function RotaPage() {
           </div>
           <div className="p-4 text-xs text-muted-foreground border-t flex items-center justify-between">
             <span>
-              {isWindowPublished ? (
-                <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                  <Lock className="h-3 w-3" /> Published schedule — read only
+              {isWindowLocked ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1",
+                    windowLockStatus === "published"
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : windowLockStatus === "approved_cno"
+                        ? "text-violet-600 dark:text-violet-400"
+                        : windowLockStatus === "approved_chief"
+                          ? "text-blue-600 dark:text-blue-400"
+                          : "text-amber-600 dark:text-amber-400",
+                  )}
+                >
+                  {windowLockStatus === "published" ? (
+                    <Lock className="h-3 w-3" />
+                  ) : (
+                    <Clock className="h-3 w-3" />
+                  )}
+                  {windowLockStatus === "published" && "Published schedule — read only"}
+                  {windowLockStatus === "approved_cno" &&
+                    "Approved (CNO) — use Approvals to publish or revert"}
+                  {windowLockStatus === "approved_chief" &&
+                    "Approved (Chief Matron) — use Approvals to advance or revert"}
+                  {windowLockStatus === "submitted" &&
+                    "Submitted for approval — use Approvals to return to draft if edits are needed"}
                 </span>
               ) : (
                 "Click a cell to cycle shifts · Drag a shift onto another nurse's same-day cell to swap."
