@@ -98,8 +98,17 @@ function isNAType(role: string) {
   return /nursing\s*assistant/i.test(role);
 }
 
+function isInternType(role: string) {
+  return /nurse\s*intern|intern\s*nurse/i.test(role);
+}
+
 function isHeadOrSupervisor(role: string) {
   return /head nurse|supervisor|matron|sister/i.test(role);
+}
+
+// Nurse interns count toward the nurses minimum (min_morning/night_nurses covers both)
+function isNurseOrIntern(role: string) {
+  return !isNAType(role) && !isHeadOrSupervisor(role);
 }
 
 /**
@@ -180,10 +189,67 @@ function scheduleGroup(
 }
 
 /**
+ * Post-scheduling pass: promote OFF nurses to cover any gap between the
+ * cycle-assigned coverage and the ward's configured minimum staffing rules.
+ * Applied after all scheduleGroup calls so LEAVE overrides are already fixed.
+ */
+function enforceMinima(
+  out: DraftAssignment[],
+  wardNurses: NurseInput[],
+  ward: WardInput,
+  days: number,
+  startDate: Date,
+): void {
+  const nurseById = new Map(wardNurses.map((n) => [n.id, n]));
+
+  for (let d = 0; d < days; d++) {
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + d);
+    const dateStr = ymd(date);
+
+    // Collect this day's assignments for this ward's nurses (mutable references)
+    const dayAssignments = out.filter(
+      (a) => a.shift_date === dateStr && nurseById.has(a.nurse_id),
+    );
+
+    const countOnShift = (shift: ShiftCode, roleTest: (r: string) => boolean) =>
+      dayAssignments.filter(
+        (a) => a.shift === shift && roleTest(nurseById.get(a.nurse_id)?.role ?? ""),
+      ).length;
+
+    // Promote available OFF nurses of the given role type to targetShift until deficit is met
+    const promote = (needed: number, current: number, targetShift: ShiftCode, roleTest: (r: string) => boolean) => {
+      let deficit = needed - current;
+      for (const a of dayAssignments) {
+        if (deficit <= 0) break;
+        if (a.shift !== "OFF") continue;
+        const role = nurseById.get(a.nurse_id)?.role ?? "";
+        if (roleTest(role)) {
+          a.shift = targetShift;
+          deficit--;
+        }
+      }
+    };
+
+    // Morning minimums (nurses + interns counted together toward min_morning_nurses)
+    promote(ward.min_morning_supervisor, countOnShift("M", isHeadOrSupervisor), "M", isHeadOrSupervisor);
+    promote(ward.min_morning_nurses, countOnShift("M", isNurseOrIntern), "M", isNurseOrIntern);
+    promote(ward.min_morning_na, countOnShift("M", isNAType), "M", isNAType);
+
+    // Night minimums — only promotes from OFF, won't pull from morning
+    promote(ward.min_night_supervisor, countOnShift("N", isHeadOrSupervisor), "N", isHeadOrSupervisor);
+    promote(ward.min_night_nurses, countOnShift("N", isNurseOrIntern), "N", isNurseOrIntern);
+    promote(ward.min_night_na, countOnShift("N", isNAType), "N", isNAType);
+  }
+}
+
+/**
  * Generate a 28-day draft schedule.
  *
- * Each ward's nurses are split by role and scheduled via the 7-day cycle
- * (NURSE_CYCLE for nurses/NAs, SUPERVISOR_CYCLE for supervisors).
+ * Each ward's nurses are split by role and scheduled via the cycle pattern
+ * (NURSE_CYCLE for nurses/NAs, SUPERVISOR_CYCLE for supervisors). After the
+ * cycle runs, enforceMinima promotes OFF nurses to cover any shortfall against
+ * the ward's configured safety minimums.
  * Nurses without a matching primary ward receive OFF (or LEAVE) for every day.
  */
 export function generateSchedule(opts: {
@@ -203,12 +269,18 @@ export function generateSchedule(opts: {
     const wardNurses = nurses.filter((n) => parseWards(n.ward)[0] === ward.name);
 
     const supervisors = wardNurses.filter((n) => isHeadOrSupervisor(n.role));
-    const regulars = wardNurses.filter((n) => !isNAType(n.role) && !isHeadOrSupervisor(n.role));
+    const regulars = wardNurses.filter(
+      (n) => !isNAType(n.role) && !isHeadOrSupervisor(n.role) && !isInternType(n.role),
+    );
+    const interns = wardNurses.filter((n) => isInternType(n.role));
     const nas = wardNurses.filter((n) => isNAType(n.role));
 
     scheduleGroup(supervisors, SUPERVISOR_CYCLE, days, opts.startDate, leave, ward.name, out);
     scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
+    scheduleGroup(interns, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
     scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
+
+    enforceMinima(out, wardNurses, ward, days, opts.startDate);
 
     wardNurses.forEach((n) => scheduled.add(n.id));
   }

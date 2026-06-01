@@ -3,16 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useState, useId } from "react";
-import {
-  Building2,
-  Plus,
-  Trash2,
-  AlertTriangle,
-  CheckCircle2,
-  Users,
-  Loader2,
-  Pencil,
-} from "lucide-react";
+import { Building2, Plus, Trash2, Loader2, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
@@ -48,8 +39,6 @@ type Ward = {
   min_night_nurses: number;
   min_night_supervisor: number;
   min_night_na: number;
-  patients: number;
-  staffed: number;
 };
 
 function WardsPage() {
@@ -120,8 +109,6 @@ function WardsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {wards.map((w) => {
-            const minM = w.min_morning_nurses + w.min_morning_supervisor + w.min_morning_na;
-            const ok = w.staffed >= minM;
             return (
               <div key={w.id} className="bg-card border rounded-xl p-5 shadow-soft">
                 <div className="flex items-start justify-between gap-2">
@@ -130,15 +117,6 @@ function WardsPage() {
                     <p className="text-xs text-muted-foreground mt-0.5">Ratio: {w.ratio || "—"}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {ok ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-success/15 text-success font-semibold">
-                        <CheckCircle2 className="h-3 w-3" /> Safe
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-destructive/15 text-destructive font-semibold">
-                        <AlertTriangle className="h-3 w-3" /> Understaffed
-                      </span>
-                    )}
                     {canManageStaff && (
                       <>
                         <button
@@ -168,8 +146,7 @@ function WardsPage() {
                       Morning min
                     </p>
                     <p className="text-sm font-semibold mt-1">
-                      {w.min_morning_nurses} N · {w.min_morning_supervisor} S · {w.min_morning_na}{" "}
-                      NA
+                      {w.min_morning_supervisor} S · {w.min_morning_nurses} N+I · {w.min_morning_na} NA
                     </p>
                   </div>
                   <div className="border rounded-lg p-3">
@@ -177,26 +154,11 @@ function WardsPage() {
                       Night min
                     </p>
                     <p className="text-sm font-semibold mt-1">
-                      {w.min_night_nurses} N · {w.min_night_supervisor} S · {w.min_night_na} NA
+                      {w.min_night_supervisor} S · {w.min_night_nurses} N+I · {w.min_night_na} NA
                     </p>
                   </div>
                 </div>
 
-                {w.patients > 10 && (
-                  <div className="mt-3 rounded-md bg-warning/15 text-warning-foreground px-3 py-2 text-xs">
-                    <strong>Morning shift:</strong> {w.patients} patients — supervisor assigned to{" "}
-                    {w.patients - 10} overflow patient{w.patients - 10 !== 1 ? "s" : ""}.
-                  </div>
-                )}
-
-                <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Users className="h-3.5 w-3.5" /> {w.staffed} staffed
-                  </span>
-                  <span>
-                    Patients: <strong className="text-foreground">{w.patients}</strong>
-                  </span>
-                </div>
               </div>
             );
           })}
@@ -220,8 +182,6 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
     min_night_nurses: 2,
     min_night_supervisor: 0,
     min_night_na: 1,
-    patients: 0,
-    staffed: 0,
   });
   const [busy, setBusy] = useState(false);
 
@@ -271,7 +231,7 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="grid grid-cols-3 gap-2">
           <NumField
-            label="AM Nurses"
+            label="AM Nurses+Intern"
             value={form.min_morning_nurses}
             onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
           />
@@ -286,7 +246,7 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
             onChange={(v) => setForm({ ...form, min_morning_na: v })}
           />
           <NumField
-            label="PM Nurses"
+            label="PM Nurses+Intern"
             value={form.min_night_nurses}
             onChange={(v) => setForm({ ...form, min_night_nurses: v })}
           />
@@ -299,18 +259,6 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
             label="PM NA"
             value={form.min_night_na}
             onChange={(v) => setForm({ ...form, min_night_na: v })}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <NumField
-            label="Patients"
-            value={form.patients}
-            onChange={(v) => setForm({ ...form, patients: v })}
-          />
-          <NumField
-            label="Currently staffed"
-            value={form.staffed}
-            onChange={(v) => setForm({ ...form, staffed: v })}
           />
         </div>
         <div className="flex justify-end gap-2 pt-2">
@@ -345,8 +293,6 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
     min_night_nurses: ward.min_night_nurses,
     min_night_supervisor: ward.min_night_supervisor,
     min_night_na: ward.min_night_na,
-    patients: ward.patients,
-    staffed: ward.staffed,
   });
   const [busy, setBusy] = useState(false);
 
@@ -399,7 +345,7 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
         </div>
         <div className="grid grid-cols-3 gap-2">
           <NumField
-            label="AM Nurses"
+            label="AM Nurses+Intern"
             value={form.min_morning_nurses}
             onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
           />
@@ -414,7 +360,7 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             onChange={(v) => setForm({ ...form, min_morning_na: v })}
           />
           <NumField
-            label="PM Nurses"
+            label="PM Nurses+Intern"
             value={form.min_night_nurses}
             onChange={(v) => setForm({ ...form, min_night_nurses: v })}
           />
@@ -427,18 +373,6 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             label="PM NA"
             value={form.min_night_na}
             onChange={(v) => setForm({ ...form, min_night_na: v })}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <NumField
-            label="Patients"
-            value={form.patients}
-            onChange={(v) => setForm({ ...form, patients: v })}
-          />
-          <NumField
-            label="Currently staffed"
-            value={form.staffed}
-            onChange={(v) => setForm({ ...form, staffed: v })}
           />
         </div>
         <div className="flex justify-end gap-2 pt-2">

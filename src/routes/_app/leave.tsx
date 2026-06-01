@@ -32,10 +32,13 @@ const statusStyle: Record<string, string> = {
   Rejected: "bg-destructive/15 text-destructive",
 };
 
+type StatusFilter = "All" | "Pending" | "Approved" | "Rejected";
+
 function LeavePage() {
   const { user, canApproveLeave } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id],
@@ -84,6 +87,12 @@ function LeavePage() {
     Rejected: rows.filter((r) => r.status === "Rejected").length,
   };
 
+  const visibleRows = statusFilter === "All" ? rows : rows.filter((r) => r.status === statusFilter);
+
+  const filterActiveStyle = "ring-2 ring-primary";
+  const cardStyle = (s: StatusFilter) =>
+    `bg-card border rounded-xl p-4 shadow-soft cursor-pointer transition hover:shadow-md ${statusFilter === s ? filterActiveStyle : ""}`;
+
   return (
     <div>
       <PageHeader
@@ -102,10 +111,20 @@ function LeavePage() {
 
       <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-6">
         {(["Pending", "Approved", "Rejected"] as const).map((s) => (
-          <div key={s} className="bg-card border rounded-xl p-4 shadow-soft">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">{s}</p>
-            <p className="text-2xl font-bold mt-1">{counts[s]}</p>
-          </div>
+          <button
+            key={s}
+            type="button"
+            onClick={() => setStatusFilter((f) => (f === s ? "All" : s))}
+            className={cardStyle(s)}
+          >
+            <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium text-left">
+              {s}
+            </p>
+            <p className="text-2xl font-bold mt-1 text-left">{counts[s]}</p>
+            {statusFilter === s && (
+              <p className="text-[10px] text-primary font-medium mt-0.5 text-left">Filtering ↑</p>
+            )}
+          </button>
         ))}
       </div>
 
@@ -142,7 +161,17 @@ function LeavePage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((l) => (
+                {visibleRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={canApproveLeave ? 5 : 3}
+                      className="px-4 py-8 text-center text-sm text-muted-foreground"
+                    >
+                      No {statusFilter.toLowerCase()} requests.
+                    </td>
+                  </tr>
+                ) : null}
+                {visibleRows.map((l) => (
                   <tr key={l.id} className="border-t hover:bg-muted/30">
                     {canApproveLeave && <td className="px-4 py-3 font-medium">{l.nurse_name}</td>}
                     <td className="px-4 py-3 text-muted-foreground">{l.type}</td>

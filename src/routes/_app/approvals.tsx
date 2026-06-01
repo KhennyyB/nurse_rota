@@ -107,6 +107,16 @@ function fmtDate(d: string) {
   });
 }
 
+// Always return the canonical 28-day end from a schedule start date,
+// regardless of what the DB's max assignment date happens to be.
+function scheduleEndDate(startDate: string): string {
+  const d = new Date(startDate + "T00:00:00");
+  d.setDate(d.getDate() + 27);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function dateRange(start: string, end: string): string[] {
   const out: string[] = [];
   const cur = new Date(start + "T00:00:00");
@@ -272,13 +282,14 @@ function ApprovalsPage() {
 
   // Fetch full rota data for a published window (used by both downloads)
   async function fetchWindowData(win: RotaWindow) {
+    const endDate = scheduleEndDate(win.startDate);
     const [nursesRes, assignRes] = await Promise.all([
       supabase.from("nurses").select("id, name, role, ward").order("name"),
       supabase
         .from("shift_assignments")
         .select("nurse_id, shift_date, shift")
         .gte("shift_date", win.startDate)
-        .lte("shift_date", win.endDate)
+        .lte("shift_date", endDate)
         .eq("status", "published"),
     ]);
     const nurses = (nursesRes.data ?? []) as {
@@ -306,9 +317,10 @@ function ApprovalsPage() {
         import("xlsx"),
         fetchWindowData(win),
       ]);
-      const dates = dateRange(win.startDate, win.endDate);
+      const endDate = scheduleEndDate(win.startDate);
+      const dates = dateRange(win.startDate, endDate);
 
-      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}`;
+      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}`;
 
       const headers = [
         "Nurse",
@@ -344,7 +356,8 @@ function ApprovalsPage() {
     setDownloading(win.startDate + "-pdf");
     try {
       const { activeNurses, assignMap } = await fetchWindowData(win);
-      const dates = dateRange(win.startDate, win.endDate);
+      const endDate = scheduleEndDate(win.startDate);
+      const dates = dateRange(win.startDate, endDate);
 
       const shiftBg: Record<string, string> = {
         M: "#fef3c7",
@@ -375,7 +388,7 @@ function ApprovalsPage() {
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${win.endDate}</title>
+<title>Nurse Rota ${win.startDate} — ${endDate}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
@@ -391,7 +404,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 @media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
 <h1>Nurse Rota</h1>
-<p>${fmtDate(win.startDate)} — ${fmtDate(win.endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
+<p>${fmtDate(win.startDate)} — ${fmtDate(endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
 <table>
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
 <tbody>${bodyRows}</tbody>

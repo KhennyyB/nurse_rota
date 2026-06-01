@@ -5,7 +5,6 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   Users,
   Building2,
-  AlertTriangle,
   Clock,
   PlaneTakeoff,
   ChevronRight,
@@ -291,9 +290,6 @@ function Dashboard() {
         .data ?? [],
   });
 
-  const understaffed = wards.filter(
-    (w) => w.staffed < w.min_morning_nurses + w.min_morning_supervisor + w.min_morning_na,
-  );
   const pendingLeave = leave.filter((l) => l.status === "Pending");
 
   return (
@@ -305,13 +301,7 @@ function Dashboard() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Stat icon={Users} label="Staff" value={nurses.length} hint="Active nurses" />
-        <Stat
-          icon={Building2}
-          label="Wards"
-          value={wards.length}
-          hint={`${understaffed.length} understaffed`}
-          tone={understaffed.length ? "warn" : "success"}
-        />
+        <Stat icon={Building2} label="Wards" value={wards.length} hint="Configured wards" />
         <Stat
           icon={PlaneTakeoff}
           label="Pending Leave"
@@ -350,39 +340,17 @@ function Dashboard() {
               </Link>
             </p>
           ) : (
-            <div className="space-y-2.5">
-              {wards.slice(0, 8).map((w) => {
-                const min = w.min_morning_nurses + w.min_morning_supervisor + w.min_morning_na;
-                const ok = w.staffed >= min;
-                const pct = Math.min(100, Math.round((w.staffed / Math.max(min, 1)) * 100));
-                return (
-                  <div key={w.id} className="flex items-center gap-3 text-sm">
-                    <div className="w-32 sm:w-40 truncate font-medium">{w.name}</div>
-                    <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
-                      <svg
-                        className="h-full w-full"
-                        viewBox="0 0 100 1"
-                        preserveAspectRatio="none"
-                        aria-hidden="true"
-                      >
-                        <rect
-                          width={pct}
-                          height="1"
-                          className={ok ? "fill-success" : "fill-destructive"}
-                        />
-                      </svg>
-                    </div>
-                    <div className="w-16 text-right text-xs text-muted-foreground tabular-nums">
-                      {w.staffed}/{min}
-                    </div>
-                    {ok ? (
-                      <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
-                    ) : (
-                      <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
-                    )}
-                  </div>
-                );
-              })}
+            <div className="space-y-2">
+              {wards.slice(0, 8).map((w) => (
+                <div key={w.id} className="flex items-center justify-between gap-3 text-sm py-1">
+                  <span className="truncate font-medium w-32 sm:w-40">{w.name}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+                    AM: {w.min_morning_supervisor}S · {w.min_morning_nurses}N+I · {w.min_morning_na}NA
+                    &nbsp;·&nbsp;
+                    PM: {w.min_night_supervisor}S · {w.min_night_nurses}N+I · {w.min_night_na}NA
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </div>
