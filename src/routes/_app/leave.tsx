@@ -38,12 +38,11 @@ function LeavePage() {
   const [showAdd, setShowAdd] = useState(false);
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: ["leave"],
+    queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("leave_requests")
-        .select("*")
-        .order("created_at", { ascending: false });
+      let q = supabase.from("leave_requests").select("*").order("created_at", { ascending: false });
+      if (!canApproveLeave) q = q.eq("requested_by", user!.id);
+      const { data, error } = await q;
       if (error) throw error;
       return data as LeaveRow[];
     },
@@ -133,7 +132,7 @@ function LeavePage() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th className="text-left font-semibold px-4 py-3">Nurse</th>
+                  {canApproveLeave && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
                   <th className="text-left font-semibold px-4 py-3">Type</th>
                   <th className="text-left font-semibold px-4 py-3">Period</th>
                   <th className="text-left font-semibold px-4 py-3">Status</th>
@@ -145,7 +144,7 @@ function LeavePage() {
               <tbody>
                 {rows.map((l) => (
                   <tr key={l.id} className="border-t hover:bg-muted/30">
-                    <td className="px-4 py-3 font-medium">{l.nurse_name}</td>
+                    {canApproveLeave && <td className="px-4 py-3 font-medium">{l.nurse_name}</td>}
                     <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
                     <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
                       {l.from_date} → {l.to_date}
@@ -203,8 +202,6 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       (await supabase.from("nurses").select("id, name").order("name")).data ?? [],
   });
 
-  const [nurseId, setNurseId] = useState("");
-  const [nurseName, setNurseName] = useState(fullName ?? "");
   const [type, setType] = useState("Annual");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -214,10 +211,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const finalName = nurses.find((n) => n.id === nurseId)?.name ?? nurseName;
+    const matchedNurse = nurses.find((n) => n.name === fullName);
     const { error } = await supabase.from("leave_requests").insert({
-      nurse_id: nurseId || null,
-      nurse_name: finalName,
+      nurse_id: matchedNurse?.id ?? null,
+      nurse_name: fullName ?? "",
       requested_by: user?.id,
       type: type as "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap",
       from_date: from,
@@ -227,7 +224,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     setBusy(false);
     if (error) return toast.error(error.message);
     toast.success("Request submitted");
-    logAudit("Submitted leave request", finalName);
+    logAudit("Submitted leave request", fullName ?? "");
     qc.invalidateQueries({ queryKey: ["leave"] });
     onClose();
   }
@@ -238,37 +235,6 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New leave request" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <div>
-          <label htmlFor="leave-nurse" className="text-sm font-medium">
-            Nurse
-          </label>
-          {nurses.length > 0 ? (
-            <select
-              id="leave-nurse"
-              value={nurseId}
-              onChange={(e) => setNurseId(e.target.value)}
-              className={inputCls}
-            >
-              <option value="">— Type a name below —</option>
-              {nurses.map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.name}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          {!nurseId && (
-            <input
-              type="text"
-              aria-label="Nurse name"
-              required
-              value={nurseName}
-              onChange={(e) => setNurseName(e.target.value)}
-              placeholder="Nurse name"
-              className={`${inputCls} mt-2`}
-            />
-          )}
-        </div>
         <div>
           <label htmlFor="leave-type" className="text-sm font-medium">
             Type
