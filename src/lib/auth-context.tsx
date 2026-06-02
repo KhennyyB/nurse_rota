@@ -62,12 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function loadProfile(uid: string) {
     try {
-      const [{ data: roleRows }, { data: prof }] = await Promise.all([
-        supabase.from("user_roles").select("role").eq("user_id", uid),
-        supabase.from("profiles").select("full_name").eq("id", uid).maybeSingle(),
+      // Both functions are SECURITY DEFINER — they bypass RLS and always
+      // return the calling user's own data reliably.
+      const [{ data: roleData }, { data: profRows }] = await Promise.all([
+        supabase.rpc("get_my_roles"),
+        supabase.rpc("get_my_profile"),
       ]);
-      const name = prof?.full_name ?? null;
-      setRoles((roleRows ?? []).map((r) => r.role as AppRole));
+      const name = (profRows as { full_name: string | null }[] | null)?.[0]?.full_name ?? null;
+      setRoles(((roleData as string[]) ?? []).map((r) => r as AppRole));
       setFullName(name);
 
       // Load the nurse's facility by matching their name in the nurses table.
