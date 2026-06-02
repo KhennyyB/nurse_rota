@@ -14,6 +14,7 @@ import {
   X,
   LogOut,
   KeyRound,
+  UserCog,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ const nav = [
     roles: ["admin", "cno", "chief_matron", "hr_admin"] as AppRole[],
   },
   { to: "/audit", label: "Audit Log", icon: ShieldCheck, roles: ["admin", "cno"] as AppRole[] },
+  { to: "/users", label: "User Profiles", icon: UserCog, roles: ["admin"] as AppRole[] },
   { to: "/permissions", label: "Permissions", icon: KeyRound, roles: ["admin"] as AppRole[] },
 ] as const;
 

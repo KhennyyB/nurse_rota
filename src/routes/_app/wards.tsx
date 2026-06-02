@@ -30,7 +30,7 @@ const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 type Ward = {
   id: string;
   name: string;
-  ratio: string | null;
+  facility: string | null;
   min_morning_nurses: number;
   min_morning_supervisor: number;
   min_morning_na: number;
@@ -58,13 +58,15 @@ function WardsPage() {
     },
   });
 
-  // Partition wards: Ikoyi wards are those whose names appear in IKOYI_WARD_NAMES.
-  // Other facilities' wards are everything else.
-  const ikoyiWards = wards.filter((w) => IKOYI_WARD_NAMES.includes(w.name));
-  const otherWards = wards.filter((w) => !IKOYI_WARD_NAMES.includes(w.name));
-  const missingIkoyiWards = IKOYI_WARD_NAMES.filter((n) => !wards.some((w) => w.name === n));
+  // Wards are filtered by their facility column.
+  const visibleWards = selectedFacility
+    ? wards.filter((w) => w.facility === selectedFacility)
+    : wards;
 
-  const visibleWards = selectedFacility === "Ikoyi" ? ikoyiWards : otherWards;
+  // Ikoyi wards that haven't been seeded yet (missing from DB entirely).
+  const missingIkoyiWards = IKOYI_WARD_NAMES.filter(
+    (n) => !wards.some((w) => w.name === n && w.facility === "Ikoyi"),
+  );
 
   async function del(w: Ward) {
     if (!confirm(`Remove ward "${w.name}"?`)) return;
@@ -83,6 +85,7 @@ function WardsPage() {
     try {
       const rows = IKOYI_WARD_NAMES.map((name) => ({
         name,
+        facility: "Ikoyi",
         ...IKOYI_WARD_MINIMUMS[name],
       }));
 
@@ -252,7 +255,7 @@ function WardsPage() {
         </>
       )}
 
-      {showAdd && <AddWardModal onClose={() => setShowAdd(false)} />}
+      {showAdd && <AddWardModal facility={selectedFacility} onClose={() => setShowAdd(false)} />}
       {editingWard && <EditWardModal ward={editingWard} onClose={() => setEditingWard(null)} />}
     </div>
   );
@@ -327,7 +330,7 @@ function WardCard({
 
 // ── Add ward modal ────────────────────────────────────────────────────────────
 
-function AddWardModal({ onClose }: { onClose: () => void }) {
+function AddWardModal({ facility, onClose }: { facility: string; onClose: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: "",
@@ -343,7 +346,7 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase.from("wards").insert(form);
+    const { error } = await supabase.from("wards").insert({ ...form, facility });
     setBusy(false);
     if (error) return toast.error(error.message);
     toast.success("Ward added");

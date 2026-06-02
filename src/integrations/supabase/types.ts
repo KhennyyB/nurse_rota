@@ -222,6 +222,7 @@ export type Database = {
       wards: {
         Row: {
           created_at: string;
+          facility: string | null;
           id: string;
           min_morning_na: number;
           min_morning_nurses: number;
@@ -236,6 +237,7 @@ export type Database = {
         };
         Insert: {
           created_at?: string;
+          facility?: string | null;
           id?: string;
           min_morning_na?: number;
           min_morning_nurses?: number;
@@ -250,6 +252,7 @@ export type Database = {
         };
         Update: {
           created_at?: string;
+          facility?: string | null;
           id?: string;
           min_morning_na?: number;
           min_morning_nurses?: number;

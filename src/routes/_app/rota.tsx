@@ -352,9 +352,15 @@ function RotaPage() {
     setGenOpen(false);
     setBusy(true);
     try {
+      // Only pass wards that belong to this facility (or have no facility set).
+      const facilityWards = wards.filter((w) => {
+        const wf = (w as WardInput & { facility?: string | null }).facility;
+        return !wf || wf === genForm.facility;
+      });
+
       const draft = generateSchedule({
         nurses: schedulingNurses,
-        wards,
+        wards: facilityWards,
         leave,
         startDate: genStart,
         days: DAYS,
