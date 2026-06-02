@@ -15,7 +15,6 @@ import {
   UserCog,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
-import { IKOYI_WARD_MINIMUMS } from "@/lib/auto-schedule";
 import { toast } from "sonner";
 import { useState, type ComponentType, type ReactNode } from "react";
 
@@ -351,22 +350,7 @@ function Dashboard() {
               View all <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
-          {facilityFilter === "Ikoyi" ? (
-            <div className="space-y-2">
-              {Object.entries(IKOYI_WARD_MINIMUMS)
-                .slice(0, 8)
-                .map(([name, m]) => (
-                  <div key={name} className="flex items-center justify-between gap-3 text-sm py-1">
-                    <span className="truncate font-medium w-32 sm:w-40">{name}</span>
-                    <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                      AM: {m.min_morning_supervisor}S · {m.min_morning_nurses}N · {m.min_morning_na}
-                      NA &nbsp;·&nbsp; PM: {m.min_night_supervisor}S · {m.min_night_nurses}N ·{" "}
-                      {m.min_night_na}NA
-                    </span>
-                  </div>
-                ))}
-            </div>
-          ) : wards.length === 0 ? (
+          {wards.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
               No wards configured yet.{" "}
               <Link to="/wards" className="text-primary hover:underline">
