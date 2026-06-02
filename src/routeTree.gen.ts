@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppWardsRouteImport } from './routes/_app/wards'
+import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppStaffRouteImport } from './routes/_app/staff'
 import { Route as AppRotaRouteImport } from './routes/_app/rota'
 import { Route as AppReportsRouteImport } from './routes/_app/reports'
@@ -38,6 +39,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppWardsRoute = AppWardsRouteImport.update({
   id: '/wards',
   path: '/wards',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsersRoute = AppUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
   getParentRoute: () => AppRoute,
 } as any)
 const AppStaffRoute = AppStaffRouteImport.update({
@@ -86,6 +92,7 @@ export interface FileRoutesByFullPath {
   '/reports': typeof AppReportsRoute
   '/rota': typeof AppRotaRoute
   '/staff': typeof AppStaffRoute
+  '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
 }
 export interface FileRoutesByTo {
@@ -97,6 +104,7 @@ export interface FileRoutesByTo {
   '/reports': typeof AppReportsRoute
   '/rota': typeof AppRotaRoute
   '/staff': typeof AppStaffRoute
+  '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
   '/': typeof AppIndexRoute
 }
@@ -111,6 +119,7 @@ export interface FileRoutesById {
   '/_app/reports': typeof AppReportsRoute
   '/_app/rota': typeof AppRotaRoute
   '/_app/staff': typeof AppStaffRoute
+  '/_app/users': typeof AppUsersRoute
   '/_app/wards': typeof AppWardsRoute
   '/_app/': typeof AppIndexRoute
 }
@@ -126,6 +135,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/rota'
     | '/staff'
+    | '/users'
     | '/wards'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -137,6 +147,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/rota'
     | '/staff'
+    | '/users'
     | '/wards'
     | '/'
   id:
@@ -150,6 +161,7 @@ export interface FileRouteTypes {
     | '/_app/reports'
     | '/_app/rota'
     | '/_app/staff'
+    | '/_app/users'
     | '/_app/wards'
     | '/_app/'
   fileRoutesById: FileRoutesById
@@ -187,6 +199,13 @@ declare module '@tanstack/react-router' {
       path: '/wards'
       fullPath: '/wards'
       preLoaderRoute: typeof AppWardsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/users': {
+      id: '/_app/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof AppUsersRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/staff': {
@@ -249,6 +268,7 @@ interface AppRouteChildren {
   AppReportsRoute: typeof AppReportsRoute
   AppRotaRoute: typeof AppRotaRoute
   AppStaffRoute: typeof AppStaffRoute
+  AppUsersRoute: typeof AppUsersRoute
   AppWardsRoute: typeof AppWardsRoute
   AppIndexRoute: typeof AppIndexRoute
 }
@@ -261,6 +281,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppReportsRoute: AppReportsRoute,
   AppRotaRoute: AppRotaRoute,
   AppStaffRoute: AppStaffRoute,
+  AppUsersRoute: AppUsersRoute,
   AppWardsRoute: AppWardsRoute,
   AppIndexRoute: AppIndexRoute,
 }

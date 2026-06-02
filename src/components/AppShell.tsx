@@ -15,10 +15,11 @@ import {
   LogOut,
   KeyRound,
   UserCog,
+  LogIn,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
-import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { useAuth, ROLE_DESCRIPTIONS, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { supabase } from "@/integrations/supabase/client";
 
 const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
@@ -50,7 +51,16 @@ export async function appBeforeLoad() {
 
 export function AppShell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const { user, fullName, roles, signOut, loading } = useAuth();
+  const {
+    user,
+    fullName,
+    roles,
+    activeRole,
+    needsRoleSelection,
+    selectRole,
+    signOut,
+    loading,
+  } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
@@ -62,10 +72,21 @@ export function AppShell() {
     if (!loading && !user) navigate({ to: "/login" });
   }, [user, loading, navigate]);
 
-  const visibleNav = nav.filter(
-    (n) => roles.length === 0 || n.roles.some((r) => roles.includes(r)),
+  if (needsRoleSelection) {
+    return (
+      <RoleSelectionScreen
+        fullName={fullName}
+        roles={roles}
+        selectRole={selectRole}
+        signOut={signOut}
+      />
+    );
+  }
+
+  const visibleNav = nav.filter((n) =>
+    activeRole ? n.roles.includes(activeRole) : roles.length === 0,
   );
-  const primaryRole = roles[0];
+  const primaryRole = activeRole ?? roles[0];
   const initials = (fullName ?? user?.email ?? "?")
     .split(/[\s@]/)
     .filter(Boolean)
@@ -122,6 +143,86 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+    </div>
+  );
+}
+
+function RoleSelectionScreen({
+  fullName,
+  roles,
+  selectRole,
+  signOut,
+}: {
+  fullName: string | null;
+  roles: AppRole[];
+  selectRole: (role: AppRole) => void;
+  signOut: () => Promise<void>;
+}) {
+  const [selected, setSelected] = useState<AppRole>(roles[0]);
+
+  useEffect(() => {
+    if (!roles.includes(selected)) setSelected(roles[0]);
+  }, [roles, selected]);
+
+  return (
+    <div className="min-h-screen bg-background text-foreground grid place-items-center px-4">
+      <form
+        className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-soft"
+        onSubmit={(event) => {
+          event.preventDefault();
+          selectRole(selected);
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-12 w-12 rounded-lg bg-white grid place-items-center overflow-hidden border">
+            <img
+              src={logo}
+              alt="Iwosan Lagoon Hospitals"
+              className="h-full w-full object-contain"
+            />
+          </div>
+          <div className="min-w-0">
+            <p className="text-lg font-bold leading-tight">Choose your role</p>
+            <p className="text-sm text-muted-foreground truncate">
+              {fullName ? `Continue as ${fullName}` : "Select how you want to sign in"}
+            </p>
+          </div>
+        </div>
+
+        <label htmlFor="active-role" className="mt-6 block text-sm font-medium">
+          Login role
+        </label>
+        <select
+          id="active-role"
+          value={selected}
+          onChange={(event) => setSelected(event.target.value as AppRole)}
+          className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          {roles.map((role) => (
+            <option key={role} value={role}>
+              {ROLE_LABELS[role]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-2 min-h-10 text-xs text-muted-foreground">
+          {ROLE_DESCRIPTIONS[selected]}
+        </p>
+
+        <button
+          type="submit"
+          className="mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <LogIn className="h-4 w-4" />
+          Open dashboard
+        </button>
+        <button
+          type="button"
+          onClick={signOut}
+          className="mt-3 h-10 w-full rounded-md border bg-background text-sm font-medium hover:bg-muted"
+        >
+          Sign out
+        </button>
+      </form>
     </div>
   );
 }

@@ -30,7 +30,11 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx | null>(null);
 
-const SESSION_ROLE_KEY = (uid: string) => `nurse_rota_role_${uid}`;
+export const selectedRoleStorageKey = (uid: string) => `nurse_rota_role_${uid}`;
+
+export function rememberSelectedRole(uid: string, role: AppRole) {
+  sessionStorage.setItem(selectedRoleStorageKey(uid), role);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -85,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (loadedRoles.length === 1) {
         setActiveRole(loadedRoles[0]);
       } else if (loadedRoles.length > 1) {
-        const stored = sessionStorage.getItem(SESSION_ROLE_KEY(uid)) as AppRole | null;
+        const stored = sessionStorage.getItem(selectedRoleStorageKey(uid)) as AppRole | null;
         if (stored && loadedRoles.includes(stored)) {
           setActiveRole(stored);
         } else {
@@ -114,16 +118,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function selectRole(role: AppRole) {
-    if (user) sessionStorage.setItem(SESSION_ROLE_KEY(user.id), role);
+    if (user) rememberSelectedRole(user.id, role);
     setActiveRole(role);
   }
 
-  // hasRole / hasAnyRole check against the full role list (for UI that needs
-  // to know what roles are available). Permission flags use activeRole only.
-  const hasRole = (r: AppRole) => roles.includes(r);
-  const hasAnyRole = (rs: AppRole[]) => rs.some((r) => roles.includes(r));
-
   const ar = activeRole;
+  const hasRole = (r: AppRole) => ar === r;
+  const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
   const isInActiveRole = (...rs: AppRole[]) => ar !== null && rs.includes(ar);
 
   const value: AuthCtx = {
@@ -147,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canApproveShiftSwitch: ar === "admin",
     canCreateLogin: ar === "admin",
     signOut: async () => {
-      if (user) sessionStorage.removeItem(SESSION_ROLE_KEY(user.id));
+      if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
       setActiveRole(null);
       await supabase.auth.signOut();
     },
