@@ -75,22 +75,51 @@ function WardsPage() {
     qc.invalidateQueries({ queryKey: ["wards"] });
   }
 
-  // Seed any missing Ikoyi wards into the DB from the hardcoded defaults.
+  // Seed all Ikoyi wards into the DB from the hardcoded defaults.
+  // Uses upsert so it's safe to run multiple times — existing rows are updated,
+  // missing rows are created.
   async function seedIkoyiWards() {
-    if (!missingIkoyiWards.length) return;
     setSeeding(true);
     try {
-      const rows = missingIkoyiWards.map((name) => ({
+      const rows = IKOYI_WARD_NAMES.map((name) => ({
         name,
         ...IKOYI_WARD_MINIMUMS[name],
       }));
-      const { error } = await supabase.from("wards").insert(rows);
-      if (error) throw error;
-      toast.success(`Seeded ${rows.length} Ikoyi ward${rows.length > 1 ? "s" : ""}`);
-      logAudit("Seeded Ikoyi default wards", missingIkoyiWards.join(", "));
+
+      // Insert all; on name conflict update the staffing numbers so the DB
+      // always reflects the correct hardcoded values.
+      for (const row of rows) {
+        const existing = wards.find((w) => w.name === row.name);
+        if (existing) {
+          const { error } = await supabase
+            .from("wards")
+            .update({
+              min_morning_nurses: row.min_morning_nurses,
+              min_morning_supervisor: row.min_morning_supervisor,
+              min_morning_na: row.min_morning_na,
+              min_night_nurses: row.min_night_nurses,
+              min_night_supervisor: row.min_night_supervisor,
+              min_night_na: row.min_night_na,
+            })
+            .eq("id", existing.id);
+          if (error) {
+            toast.error(`Failed on "${row.name}": ${error.message}`);
+            return;
+          }
+        } else {
+          const { error } = await supabase.from("wards").insert(row);
+          if (error) {
+            toast.error(`Failed on "${row.name}": ${error.message}`);
+            return;
+          }
+        }
+      }
+
+      toast.success(`All ${rows.length} Ikoyi wards seeded / updated`);
+      logAudit("Seeded Ikoyi ward defaults", IKOYI_WARD_NAMES.join(", "));
       qc.invalidateQueries({ queryKey: ["wards"] });
     } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Seed failed");
+      toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSeeding(false);
     }
@@ -158,27 +187,29 @@ function WardsPage() {
             ))}
           </div>
 
-          {/* Ikoyi: seed button if wards are missing from DB */}
-          {selectedFacility === "Ikoyi" && missingIkoyiWards.length > 0 && canManageStaff && (
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
-              <Download className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          {/* Ikoyi: seed / sync button — always visible so admin can push latest rules */}
+          {selectedFacility === "Ikoyi" && canManageStaff && (
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
+              <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               <div className="flex-1">
-                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                  {missingIkoyiWards.length} ward{missingIkoyiWards.length > 1 ? "s" : ""} not yet
-                  in the database
+                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
+                  Sync Ikoyi ward defaults
                 </p>
-                <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
-                  {missingIkoyiWards.join(", ")}
+                <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
+                  Creates missing wards and resets all staffing numbers to the configured rules.
+                  {missingIkoyiWards.length > 0 && (
+                    <> Not yet created: {missingIkoyiWards.join(", ")}.</>
+                  )}
                 </p>
               </div>
               <button
                 type="button"
                 disabled={seeding}
                 onClick={seedIkoyiWards}
-                className="h-8 px-3 rounded-md bg-amber-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-amber-700 disabled:opacity-50 shrink-0"
+                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
               >
                 {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
-                Seed defaults
+                {seeding ? "Syncing…" : "Sync defaults"}
               </button>
             </div>
           )}
