@@ -117,7 +117,15 @@ export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
     min_night_supervisor: 1,
     min_night_na: 1,
   },
-  "NICU & SCBU": {
+  NICU: {
+    min_morning_nurses: 4,
+    min_morning_supervisor: 1,
+    min_morning_na: 1,
+    min_night_nurses: 3,
+    min_night_supervisor: 1,
+    min_night_na: 1,
+  },
+  SCBU: {
     min_morning_nurses: 4,
     min_morning_supervisor: 1,
     min_morning_na: 1,
