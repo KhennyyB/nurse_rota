@@ -54,7 +54,7 @@ export const Route = createFileRoute("/_app/rota")({
 
 const DAYS = 28;
 const SHIFT_CYCLE: ShiftCode[] = ["M", "N", "OFF", "LEAVE"];
-const FACILITIES = ["Ikeja", "Ikeja Clinic", "Idejo", "LSS", "Ikoyi", "Ligali", "Wellness"];
+const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"];
 
 const shiftStyles: Record<ShiftCode, string> = {
   M: "bg-amber-100 text-amber-900 border-amber-200",

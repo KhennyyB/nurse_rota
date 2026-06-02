@@ -36,15 +36,7 @@ export const Route = createFileRoute("/_app/staff")({
   component: StaffPage,
 });
 
-const FACILITIES = [
-  "Ikeja",
-  "Ikeja Clinic",
-  "Idejo",
-  "LSS",
-  "Ikoyi",
-  "Ligali",
-  "Wellness",
-] as const;
+const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 const NURSE_ROLES = [
   "Nurse",
@@ -208,7 +200,7 @@ function StaffPage() {
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
                   <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">Hours</th>
-                  {canManageStaff && <th className="px-4 py-3"></th>}
+                  {canManageStaff && <th className="px-4 py-3" aria-label="Actions"></th>}
                 </tr>
               </thead>
               <tbody>
