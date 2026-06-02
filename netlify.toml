@@ -3,7 +3,7 @@
   publish = "dist"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "22"
 
 # Route all requests to index.html so TanStack Router handles navigation client-side
 [[redirects]]
