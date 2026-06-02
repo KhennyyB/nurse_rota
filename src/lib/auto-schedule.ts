@@ -387,8 +387,9 @@ export function generateSchedule(opts: {
   const supervisorCycle = facility === "Ikoyi" ? NURSE_CYCLE : SUPERVISOR_CYCLE;
 
   for (const ward of wards) {
-    const ikoyiOverride = facility === "Ikoyi" ? IKOYI_WARD_MINIMUMS[ward.name] : undefined;
-    const effectiveWard: WardInput = ikoyiOverride ? { ...ward, ...ikoyiOverride } : ward;
+    // Always use DB ward values — the Ikoyi wards are seeded into the DB from
+    // IKOYI_WARD_MINIMUMS and are editable there. No hardcoded override is applied.
+    const effectiveWard: WardInput = ward;
 
     const wardNurses = nurses.filter(
       (n) => parseWards(n.ward)[0] === ward.name && !isGlobalHead(n.role) && !isInternType(n.role),

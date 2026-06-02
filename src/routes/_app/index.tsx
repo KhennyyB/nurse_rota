@@ -15,6 +15,7 @@ import {
   UserCog,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { IKOYI_WARD_MINIMUMS } from "@/lib/auto-schedule";
 import { toast } from "sonner";
 import { useState, type ComponentType, type ReactNode } from "react";
 
@@ -273,9 +274,12 @@ function UserProfilesPanel() {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 function Dashboard() {
-  const { fullName, isAdmin } = useAuth();
+  const { fullName, isAdmin, nurseFacility, canApproveLeave } = useAuth();
 
-  const { data: nurses = [] } = useQuery({
+  // Admins/management see all facilities; regular nurses see only their facility.
+  const facilityFilter = !isAdmin && nurseFacility ? nurseFacility : null;
+
+  const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses"],
     queryFn: async () => (await supabase.from("nurses").select("*")).data ?? [],
   });
@@ -290,13 +294,28 @@ function Dashboard() {
         .data ?? [],
   });
 
-  const pendingLeave = leave.filter((l) => l.status === "Pending");
+  const nurses = facilityFilter
+    ? allNurses.filter((n) => n.facility === facilityFilter)
+    : allNurses;
+
+  // For the pending leave panel, non-approvers see only their facility's leave.
+  const facilityNurseNames = new Set(nurses.map((n) => n.name));
+  const visibleLeave =
+    facilityFilter && !canApproveLeave
+      ? leave.filter((l) => facilityNurseNames.has(l.nurse_name))
+      : leave;
+
+  const pendingLeave = visibleLeave.filter((l) => l.status === "Pending");
+
+  const subtitle = facilityFilter
+    ? `Live staffing and rota health · ${facilityFilter}`
+    : "Live staffing, approvals and rota health across all facilities";
 
   return (
     <div className="space-y-6">
       <PageHeader
         title={fullName ? `Welcome, ${fullName.split(" ")[0]}` : "Operations Dashboard"}
-        subtitle="Live staffing, approvals and rota health across all wards"
+        subtitle={subtitle}
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -332,7 +351,22 @@ function Dashboard() {
               View all <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
-          {wards.length === 0 ? (
+          {facilityFilter === "Ikoyi" ? (
+            <div className="space-y-2">
+              {Object.entries(IKOYI_WARD_MINIMUMS)
+                .slice(0, 8)
+                .map(([name, m]) => (
+                  <div key={name} className="flex items-center justify-between gap-3 text-sm py-1">
+                    <span className="truncate font-medium w-32 sm:w-40">{name}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+                      AM: {m.min_morning_supervisor}S · {m.min_morning_nurses}N · {m.min_morning_na}
+                      NA &nbsp;·&nbsp; PM: {m.min_night_supervisor}S · {m.min_night_nurses}N ·{" "}
+                      {m.min_night_na}NA
+                    </span>
+                  </div>
+                ))}
+            </div>
+          ) : wards.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
               No wards configured yet.{" "}
               <Link to="/wards" className="text-primary hover:underline">
@@ -345,9 +379,9 @@ function Dashboard() {
                 <div key={w.id} className="flex items-center justify-between gap-3 text-sm py-1">
                   <span className="truncate font-medium w-32 sm:w-40">{w.name}</span>
                   <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                    AM: {w.min_morning_supervisor}S · {w.min_morning_nurses}N+I · {w.min_morning_na}NA
-                    &nbsp;·&nbsp;
-                    PM: {w.min_night_supervisor}S · {w.min_night_nurses}N+I · {w.min_night_na}NA
+                    AM: {w.min_morning_supervisor}S · {w.min_morning_nurses}N+I ·{" "}
+                    {w.min_morning_na}NA &nbsp;·&nbsp; PM: {w.min_night_supervisor}S ·{" "}
+                    {w.min_night_nurses}N+I · {w.min_night_na}NA
                   </span>
                 </div>
               ))}

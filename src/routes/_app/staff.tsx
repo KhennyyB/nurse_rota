@@ -13,8 +13,11 @@ import {
   X,
   Loader2,
   Pencil,
+  KeyRound,
+  CheckCircle2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { createClient } from "@supabase/supabase-js";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -67,12 +70,13 @@ type Nurse = {
 };
 
 function StaffPage() {
-  const { canManageStaff } = useAuth();
+  const { canManageStaff, canCreateLogin } = useAuth();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [editingNurse, setEditingNurse] = useState<Nurse | null>(null);
+  const [createLoginNurse, setCreateLoginNurse] = useState<Nurse | null>(null);
 
   const { data: nurses = [], isLoading } = useQuery({
     queryKey: ["nurses"],
@@ -85,6 +89,17 @@ function StaffPage() {
       return data as Nurse[];
     },
   });
+
+  // Nurse names that already have a login (matched by full_name in profiles).
+  const { data: profileNames = [] } = useQuery({
+    queryKey: ["profile-names"],
+    enabled: canCreateLogin,
+    queryFn: async () => {
+      const { data } = await supabase.from("profiles").select("full_name");
+      return (data ?? []).map((p) => p.full_name?.toLowerCase() ?? "").filter(Boolean);
+    },
+  });
+  const hasLogin = (name: string) => profileNames.includes(name.toLowerCase());
 
   const { data: wards = [] } = useQuery<{ name: string }[]>({
     queryKey: ["wards"],
@@ -200,6 +215,9 @@ function StaffPage() {
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
                   <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">Hours</th>
+                  {canCreateLogin && (
+                    <th className="text-center font-semibold px-4 py-3">Login</th>
+                  )}
                   {canManageStaff && <th className="px-4 py-3" aria-label="Actions"></th>}
                 </tr>
               </thead>
@@ -228,6 +246,27 @@ function StaffPage() {
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
                       {n.hours_this_month}/{n.target_hours}
                     </td>
+                    {canCreateLogin && (
+                      <td className="px-4 py-3 text-center">
+                        {hasLogin(n.name) ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-[11px] text-success font-medium"
+                            title="Login exists"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" /> Active
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setCreateLoginNurse(n)}
+                            className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11px] hover:bg-primary hover:text-primary-foreground hover:border-primary transition"
+                            title="Create login for this nurse"
+                          >
+                            <KeyRound className="h-3 w-3" /> Create
+                          </button>
+                        )}
+                      </td>
+                    )}
                     {canManageStaff && (
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -269,6 +308,15 @@ function StaffPage() {
         />
       )}
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
+      {createLoginNurse && (
+        <CreateLoginModal
+          nurse={createLoginNurse}
+          onClose={() => {
+            setCreateLoginNurse(null);
+            qc.invalidateQueries({ queryKey: ["profile-names"] });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -732,5 +780,164 @@ export function Modal({
         <div className="p-5">{children}</div>
       </div>
     </div>
+  );
+}
+
+// ── Create Login modal ────────────────────────────────────────────────────────
+
+const LOGIN_ROLE_OPTIONS: { value: string; label: string }[] = [
+  { value: "nurse", label: "Nurse" },
+  { value: "head_nurse", label: "Head Nurse" },
+  { value: "hr_admin", label: "HR / Admin" },
+  { value: "chief_matron", label: "Chief Matron" },
+  { value: "cno", label: "Chief Nursing Officer (CNO)" },
+  { value: "admin", label: "System Administrator" },
+];
+
+function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("nurse");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    setBusy(true);
+    try {
+      // Use a separate client instance so the admin's session is not replaced.
+      const tempClient = createClient(
+        import.meta.env.VITE_SUPABASE_URL as string,
+        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+
+      const { data, error: signUpError } = await tempClient.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: nurse.name } },
+      });
+
+      if (signUpError) {
+        toast.error(signUpError.message);
+        return;
+      }
+
+      const userId = data.user?.id;
+      if (!userId) {
+        toast.error("Account created but user ID was not returned — check your email.");
+        return;
+      }
+
+      // Assign selected role and ensure profile is linked to this nurse's name.
+      await Promise.all([
+        supabase.from("user_roles").insert({ user_id: userId, role }),
+        supabase.from("profiles").upsert({
+          id: userId,
+          full_name: nurse.name,
+          email,
+          updated_at: new Date().toISOString(),
+        }),
+      ]);
+
+      logAudit("Created login", `${nurse.name} (${email}) — role: ${role}`);
+      toast.success(`Login created for ${nurse.name}`);
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to create login");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const cls =
+    "w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <Modal title={`Create login — ${nurse.name}`} onClose={onClose}>
+      <p className="text-sm text-muted-foreground mb-4">
+        Creates a system account. The user will log in with the email and password below. Their
+        dashboard will be scoped to the{" "}
+        <strong>{nurse.facility ?? "assigned"}</strong> facility.
+      </p>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label htmlFor="login-email" className="text-sm font-medium">
+            Email address <span className="text-destructive">*</span>
+          </label>
+          <input
+            id="login-email"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="nurse@hospital.com"
+            className={cls}
+          />
+        </div>
+        <div>
+          <label htmlFor="login-password" className="text-sm font-medium">
+            Password <span className="text-destructive">*</span>
+          </label>
+          <input
+            id="login-password"
+            type="password"
+            required
+            minLength={8}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Min. 8 characters"
+            className={cls}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Share these credentials securely with the user.
+          </p>
+        </div>
+        <div>
+          <label htmlFor="login-role" className="text-sm font-medium">
+            System role <span className="text-destructive">*</span>
+          </label>
+          <select
+            id="login-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className={cls}
+          >
+            {LOGIN_ROLE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Determines what this user can see and do in the system.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !email || !password}
+            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <KeyRound className="h-3 w-3" />
+            )}
+            Create login
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

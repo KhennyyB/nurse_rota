@@ -10,6 +10,7 @@ interface AuthCtx {
   session: Session | null;
   roles: AppRole[];
   fullName: string | null;
+  nurseFacility: string | null;
   loading: boolean;
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: AppRole[]) => boolean;
@@ -20,6 +21,7 @@ interface AuthCtx {
   canApproveLeave: boolean;
   canRequestShiftSwitch: boolean;
   canApproveShiftSwitch: boolean;
+  canCreateLogin: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -30,6 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [fullName, setFullName] = useState<string | null>(null);
+  const [nurseFacility, setNurseFacility] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -43,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         setRoles([]);
         setFullName(null);
+        setNurseFacility(null);
       }
     });
 
@@ -62,11 +66,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         supabase.from("user_roles").select("role").eq("user_id", uid),
         supabase.from("profiles").select("full_name").eq("id", uid).maybeSingle(),
       ]);
+      const name = prof?.full_name ?? null;
       setRoles((roleRows ?? []).map((r) => r.role as AppRole));
-      setFullName(prof?.full_name ?? null);
+      setFullName(name);
+
+      // Load the nurse's facility by matching their name in the nurses table.
+      if (name) {
+        const { data: nurseRow } = await supabase
+          .from("nurses")
+          .select("facility")
+          .eq("name", name)
+          .maybeSingle();
+        setNurseFacility(nurseRow?.facility ?? null);
+      } else {
+        setNurseFacility(null);
+      }
     } catch {
       setRoles([]);
       setFullName(null);
+      setNurseFacility(null);
     }
   }
 
@@ -78,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     roles,
     fullName,
+    nurseFacility,
     loading,
     hasRole,
     hasAnyRole,
@@ -88,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canApproveLeave: hasAnyRole(["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canRequestShiftSwitch: hasAnyRole(["admin", "cno"]),
     canApproveShiftSwitch: hasRole("admin"),
+    canCreateLogin: hasRole("admin"),
     signOut: async () => {
       await supabase.auth.signOut();
     },

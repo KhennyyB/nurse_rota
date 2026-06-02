@@ -3,12 +3,13 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useState, useId } from "react";
-import { Building2, Plus, Trash2, Loader2, Pencil } from "lucide-react";
+import { Building2, Plus, Trash2, Loader2, Pencil, Download } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
+import { IKOYI_WARD_MINIMUMS, IKOYI_WARD_NAMES } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/wards")({
   head: () => ({
@@ -19,15 +20,12 @@ export const Route = createFileRoute("/_app/wards")({
         content:
           "Manage hospital wards, nurse-to-patient ratios and minimum staffing requirements per shift.",
       },
-      { property: "og:title", content: "Wards — Nurses Rota" },
-      {
-        property: "og:description",
-        content: "Configure ward staffing minimums and monitor coverage.",
-      },
     ],
   }),
   component: WardsPage,
 });
+
+const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 type Ward = {
   id: string;
@@ -42,10 +40,14 @@ type Ward = {
 };
 
 function WardsPage() {
-  const { canManageStaff } = useAuth();
+  const { canManageStaff, nurseFacility, isAdmin } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [editingWard, setEditingWard] = useState<Ward | null>(null);
+  const [seeding, setSeeding] = useState(false);
+
+  const defaultFacility = nurseFacility && !isAdmin ? nurseFacility : "";
+  const [selectedFacility, setSelectedFacility] = useState(defaultFacility);
 
   const { data: wards = [], isLoading } = useQuery({
     queryKey: ["wards"],
@@ -56,6 +58,14 @@ function WardsPage() {
     },
   });
 
+  // Partition wards: Ikoyi wards are those whose names appear in IKOYI_WARD_NAMES.
+  // Other facilities' wards are everything else.
+  const ikoyiWards = wards.filter((w) => IKOYI_WARD_NAMES.includes(w.name));
+  const otherWards = wards.filter((w) => !IKOYI_WARD_NAMES.includes(w.name));
+  const missingIkoyiWards = IKOYI_WARD_NAMES.filter((n) => !wards.some((w) => w.name === n));
+
+  const visibleWards = selectedFacility === "Ikoyi" ? ikoyiWards : otherWards;
+
   async function del(w: Ward) {
     if (!confirm(`Remove ward "${w.name}"?`)) return;
     const { error } = await supabase.from("wards").delete().eq("id", w.id);
@@ -65,13 +75,35 @@ function WardsPage() {
     qc.invalidateQueries({ queryKey: ["wards"] });
   }
 
+  // Seed any missing Ikoyi wards into the DB from the hardcoded defaults.
+  async function seedIkoyiWards() {
+    if (!missingIkoyiWards.length) return;
+    setSeeding(true);
+    try {
+      const rows = missingIkoyiWards.map((name) => ({
+        name,
+        ...IKOYI_WARD_MINIMUMS[name],
+      }));
+      const { error } = await supabase.from("wards").insert(rows);
+      if (error) throw error;
+      toast.success(`Seeded ${rows.length} Ikoyi ward${rows.length > 1 ? "s" : ""}`);
+      logAudit("Seeded Ikoyi default wards", missingIkoyiWards.join(", "));
+      qc.invalidateQueries({ queryKey: ["wards"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Seed failed");
+    } finally {
+      setSeeding(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader
         title="Wards & Safety Rules"
         subtitle="Minimum staffing rules enforced by the rota engine"
         actions={
-          canManageStaff && (
+          canManageStaff &&
+          selectedFacility && (
             <button
               type="button"
               onClick={() => setShowAdd(true)}
@@ -83,86 +115,113 @@ function WardsPage() {
         }
       />
 
-      {isLoading ? (
-        <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
-      ) : wards.length === 0 ? (
-        <EmptyState
-          icon={<Building2 className="h-6 w-6" />}
-          title="No wards configured"
-          description={
-            canManageStaff
-              ? "Add wards to define minimum staffing rules per shift."
-              : "Ask an administrator to configure wards."
-          }
-          action={
-            canManageStaff && (
+      {/* Facility selector */}
+      {!selectedFacility ? (
+        <div className="flex flex-col items-center justify-center py-24 gap-6">
+          <Building2 className="h-10 w-10 text-muted-foreground" />
+          <div className="text-center">
+            <p className="font-semibold text-lg">Select a facility</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Ward rules are configured per facility
+            </p>
+          </div>
+          <div className="flex gap-3">
+            {FACILITIES.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setSelectedFacility(f)}
+                className="h-10 px-5 rounded-md border bg-card text-sm font-medium hover:bg-muted transition"
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Facility tab bar */}
+          <div className="flex items-center gap-2 mb-5">
+            {(isAdmin ? FACILITIES : [selectedFacility as (typeof FACILITIES)[number]]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setSelectedFacility(f)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                  selectedFacility === f
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card hover:bg-muted"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {/* Ikoyi: seed button if wards are missing from DB */}
+          {selectedFacility === "Ikoyi" && missingIkoyiWards.length > 0 && canManageStaff && (
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
+              <Download className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                  {missingIkoyiWards.length} ward{missingIkoyiWards.length > 1 ? "s" : ""} not yet
+                  in the database
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
+                  {missingIkoyiWards.join(", ")}
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowAdd(true)}
-                className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
+                disabled={seeding}
+                onClick={seedIkoyiWards}
+                className="h-8 px-3 rounded-md bg-amber-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-amber-700 disabled:opacity-50 shrink-0"
               >
-                <Plus className="h-4 w-4" /> Add ward
+                {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
+                Seed defaults
               </button>
-            )
-          }
-        />
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {wards.map((w) => {
-            return (
-              <div key={w.id} className="bg-card border rounded-xl p-5 shadow-soft">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <h3 className="font-semibold truncate">{w.name}</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">Ratio: {w.ratio || "—"}</p>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {canManageStaff && (
-                      <>
-                        <button
-                          type="button"
-                          aria-label={`Edit ${w.name}`}
-                          onClick={() => setEditingWard(w)}
-                          className="h-7 w-7 grid place-items-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Remove ${w.name}`}
-                          onClick={() => del(w)}
-                          className="h-7 w-7 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
+            </div>
+          )}
 
-                <div className="grid grid-cols-2 gap-3 mt-4">
-                  <div className="border rounded-lg p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-                      Morning min
-                    </p>
-                    <p className="text-sm font-semibold mt-1">
-                      {w.min_morning_supervisor} S · {w.min_morning_nurses} N+I · {w.min_morning_na} NA
-                    </p>
-                  </div>
-                  <div className="border rounded-lg p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-                      Night min
-                    </p>
-                    <p className="text-sm font-semibold mt-1">
-                      {w.min_night_supervisor} S · {w.min_night_nurses} N+I · {w.min_night_na} NA
-                    </p>
-                  </div>
-                </div>
-
-              </div>
-            );
-          })}
-        </div>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
+          ) : visibleWards.length === 0 ? (
+            <EmptyState
+              icon={<Building2 className="h-6 w-6" />}
+              title="No wards configured"
+              description={
+                canManageStaff
+                  ? selectedFacility === "Ikoyi"
+                    ? "Click 'Seed defaults' above to populate Ikoyi wards, or add them manually."
+                    : "Add wards to define minimum staffing rules per shift."
+                  : "Ask an administrator to configure wards."
+              }
+              action={
+                canManageStaff && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAdd(true)}
+                    className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
+                  >
+                    <Plus className="h-4 w-4" /> Add ward
+                  </button>
+                )
+              }
+            />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {visibleWards.map((w) => (
+                <WardCard
+                  key={w.id}
+                  ward={w}
+                  canManage={canManageStaff}
+                  onEdit={() => setEditingWard(w)}
+                  onDelete={() => del(w)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {showAdd && <AddWardModal onClose={() => setShowAdd(false)} />}
@@ -171,11 +230,79 @@ function WardsPage() {
   );
 }
 
+// ── Reusable ward card ────────────────────────────────────────────────────────
+
+function WardCard({
+  ward: w,
+  canManage,
+  onEdit,
+  onDelete,
+}: {
+  ward: Ward;
+  canManage: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const nightOnly = w.min_night_nurses === 0 && w.min_night_supervisor === 0 && w.min_night_na === 0;
+  return (
+    <div className="bg-card border rounded-xl p-5 shadow-soft">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="font-semibold truncate">{w.name}</h3>
+        </div>
+        {canManage && (
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              aria-label={`Edit ${w.name}`}
+              onClick={onEdit}
+              className="h-7 w-7 grid place-items-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label={`Remove ${w.name}`}
+              onClick={onDelete}
+              className="h-7 w-7 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-3 mt-4">
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            Morning min
+          </p>
+          <p className="text-sm font-semibold mt-1">
+            {w.min_morning_supervisor}S · {w.min_morning_nurses}N · {w.min_morning_na}NA
+          </p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            Night min
+          </p>
+          {nightOnly ? (
+            <p className="text-sm font-semibold mt-1 text-muted-foreground">Morning only</p>
+          ) : (
+            <p className="text-sm font-semibold mt-1">
+              {w.min_night_supervisor}S · {w.min_night_nurses}N · {w.min_night_na}NA
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Add ward modal ────────────────────────────────────────────────────────────
+
 function AddWardModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: "",
-    ratio: "",
     min_morning_nurses: 2,
     min_morning_supervisor: 1,
     min_morning_na: 1,
@@ -216,22 +343,9 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
             className={inputCls}
           />
         </div>
-        <div>
-          <label htmlFor="ward-ratio" className="text-sm font-medium">
-            Nurse-to-patient ratio
-          </label>
-          <input
-            id="ward-ratio"
-            type="text"
-            value={form.ratio}
-            onChange={(e) => setForm({ ...form, ratio: e.target.value })}
-            placeholder="e.g. 1:8"
-            className={inputCls}
-          />
-        </div>
         <div className="grid grid-cols-3 gap-2">
           <NumField
-            label="AM Nurses+Intern"
+            label="AM Nurses"
             value={form.min_morning_nurses}
             onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
           />
@@ -246,7 +360,7 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
             onChange={(v) => setForm({ ...form, min_morning_na: v })}
           />
           <NumField
-            label="PM Nurses+Intern"
+            label="PM Nurses"
             value={form.min_night_nurses}
             onChange={(v) => setForm({ ...form, min_night_nurses: v })}
           />
@@ -282,11 +396,12 @@ function AddWardModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Edit ward modal ───────────────────────────────────────────────────────────
+
 function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: ward.name,
-    ratio: ward.ratio ?? "",
     min_morning_nurses: ward.min_morning_nurses,
     min_morning_supervisor: ward.min_morning_supervisor,
     min_morning_na: ward.min_morning_na,
@@ -299,10 +414,7 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase
-      .from("wards")
-      .update({ ...form, ratio: form.ratio || null })
-      .eq("id", ward.id);
+    const { error } = await supabase.from("wards").update(form).eq("id", ward.id);
     setBusy(false);
     if (error) return toast.error(error.message);
     toast.success("Ward updated");
@@ -330,22 +442,9 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             className={inputCls}
           />
         </div>
-        <div>
-          <label htmlFor="edit-ward-ratio" className="text-sm font-medium">
-            Nurse-to-patient ratio
-          </label>
-          <input
-            id="edit-ward-ratio"
-            type="text"
-            value={form.ratio}
-            onChange={(e) => setForm({ ...form, ratio: e.target.value })}
-            placeholder="e.g. 1:8"
-            className={inputCls}
-          />
-        </div>
         <div className="grid grid-cols-3 gap-2">
           <NumField
-            label="AM Nurses+Intern"
+            label="AM Nurses"
             value={form.min_morning_nurses}
             onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
           />
@@ -360,7 +459,7 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             onChange={(v) => setForm({ ...form, min_morning_na: v })}
           />
           <NumField
-            label="PM Nurses+Intern"
+            label="PM Nurses"
             value={form.min_night_nurses}
             onChange={(v) => setForm({ ...form, min_night_nurses: v })}
           />

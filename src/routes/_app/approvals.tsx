@@ -18,6 +18,7 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { isGlobalHead, isInternType } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -147,17 +148,35 @@ const STATUS_COLORS: Record<WindowStatus, string> = {
   published: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
+function parseWards(ward: string | null): string[] {
+  if (!ward) return [];
+  return ward.split("|").filter(Boolean);
+}
+
 function ApprovalsPage() {
   const { hasAnyRole, user } = useAuth();
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
+  // exportScope keyed by window startDate: "" = all, "__HEAD__" = head nurses, ward name = that ward
+  const [exportScope, setExportScope] = useState<Record<string, string>>({});
 
   const canApproveChief = hasAnyRole(["admin", "chief_matron"]);
   const canApproveCNO = hasAnyRole(["admin", "cno"]);
   const canPublish = hasAnyRole(["admin", "cno"]);
   const canSubmit = hasAnyRole(["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]);
   const canRevertPublished = hasAnyRole(["admin"]);
+
+  const { data: allNurses = [] } = useQuery({
+    queryKey: ["nurses-approvals"],
+    queryFn: async () =>
+      ((await supabase.from("nurses").select("id, name, role, ward").order("name")).data ?? []) as {
+        id: string;
+        name: string;
+        role: string;
+        ward: string | null;
+      }[],
+  });
 
   // Fetch all assignment windows (all statuses, bounded to ±6 months for performance)
   const { data: rows = [], isLoading } = useQuery({
@@ -280,47 +299,52 @@ function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  // Fetch full rota data for a published window (used by both downloads)
-  async function fetchWindowData(win: RotaWindow) {
+  // Fetch published rota data for a window, optionally filtered by scope.
+  // scope = "" → all staff  |  "__HEAD__" → head nurses only  |  ward name → that ward + its interns
+  async function fetchWindowData(win: RotaWindow, scope = "") {
     const endDate = scheduleEndDate(win.startDate);
-    const [nursesRes, assignRes] = await Promise.all([
-      supabase.from("nurses").select("id, name, role, ward").order("name"),
-      supabase
-        .from("shift_assignments")
-        .select("nurse_id, shift_date, shift")
-        .gte("shift_date", win.startDate)
-        .lte("shift_date", endDate)
-        .eq("status", "published"),
-    ]);
-    const nurses = (nursesRes.data ?? []) as {
-      id: string;
-      name: string;
-      role: string;
-      ward: string | null;
-    }[];
-    const assignments = (assignRes.data ?? []) as {
-      nurse_id: string;
-      shift_date: string;
-      shift: string;
-    }[];
+    const { data: assignData } = await supabase
+      .from("shift_assignments")
+      .select("nurse_id, shift_date, shift")
+      .gte("shift_date", win.startDate)
+      .lte("shift_date", endDate)
+      .eq("status", "published");
+
+    const assignments = (assignData ?? []) as { nurse_id: string; shift_date: string; shift: string }[];
     const assignMap = new Map<string, string>();
     assignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date}`, a.shift));
+
     const activeIds = new Set(assignments.map((a) => a.nurse_id));
-    const activeNurses = nurses.filter((n) => activeIds.has(n.id));
+    let activeNurses = allNurses.filter((n) => activeIds.has(n.id));
+
+    if (scope === "__HEAD__") {
+      activeNurses = activeNurses.filter((n) => isGlobalHead(n.role));
+    } else if (scope) {
+      // Ward export: ward nurses + interns whose assigned ward matches
+      activeNurses = activeNurses.filter(
+        (n) =>
+          !isGlobalHead(n.role) &&
+          parseWards(n.ward)[0] === scope,
+      );
+    }
+
     return { activeNurses, assignMap };
   }
 
   async function handleDownloadExcel(win: RotaWindow) {
+    const scope = exportScope[win.startDate] ?? "";
     setDownloading(win.startDate + "-xlsx");
     try {
       const [XLSX, { activeNurses, assignMap }] = await Promise.all([
         import("xlsx"),
-        fetchWindowData(win),
+        fetchWindowData(win, scope),
       ]);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
 
-      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}`;
+      const scopeLabel =
+        scope === "__HEAD__" ? " — Head Nurses" : scope ? ` — ${scope}` : "";
+      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${scopeLabel}`;
 
       const headers = [
         "Nurse",
@@ -344,7 +368,8 @@ function ApprovalsPage() {
       const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
       ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
       XLSX.utils.book_append_sheet(wb, ws, "Rota");
-      XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}.xlsx`);
+      const fileSuffix = scope === "__HEAD__" ? "-head-nurses" : scope ? `-${scope.replace(/\s+/g, "-").toLowerCase()}` : "";
+      XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}${fileSuffix}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
@@ -353,9 +378,10 @@ function ApprovalsPage() {
   }
 
   async function handleDownloadPdf(win: RotaWindow) {
+    const scope = exportScope[win.startDate] ?? "";
     setDownloading(win.startDate + "-pdf");
     try {
-      const { activeNurses, assignMap } = await fetchWindowData(win);
+      const { activeNurses, assignMap } = await fetchWindowData(win, scope);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
 
@@ -385,10 +411,13 @@ function ApprovalsPage() {
         })
         .join("");
 
+      const pdfScopeLabel =
+        scope === "__HEAD__" ? " — Head Nurses" : scope ? ` — ${scope}` : "";
+
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${endDate}</title>
+<title>Nurse Rota ${win.startDate} — ${endDate}${pdfScopeLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
@@ -403,7 +432,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 .lb{display:inline-block;width:10px;height:10px;border:1px solid #aaa;margin-right:2px;vertical-align:middle}
 @media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
-<h1>Nurse Rota</h1>
+<h1>Nurse Rota${pdfScopeLabel}</h1>
 <p>${fmtDate(win.startDate)} — ${fmtDate(endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
 <table>
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
@@ -609,19 +638,58 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     )}
 
                     {/* Published: revert (admin only) + downloads */}
-                    {win.status === "published" && (
-                      <>
-                        {canRevertPublished && (
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => revertPublished(win)}
-                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
-                            title="Admin only — unlocks this rota for further edits"
+                    {win.status === "published" && (() => {
+                      // Derive ward list + head nurse presence for this window
+                      const winNurseIds = new Set(
+                        rows
+                          .filter((r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate)
+                          .map((r) => r.nurse_id),
+                      );
+                      const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
+                      const hasHeads = winNurses.some((n) => isGlobalHead(n.role));
+                      const wardNames = [
+                        ...new Set(
+                          winNurses
+                            .filter((n) => !isGlobalHead(n.role))
+                            .map((n) => parseWards(n.ward)[0])
+                            .filter((w): w is string => !!w),
+                        ),
+                      ].sort();
+                      const currentScope = exportScope[win.startDate] ?? "";
+                      return (
+                        <>
+                          {canRevertPublished && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => revertPublished(win)}
+                              className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                              title="Admin only — unlocks this rota for further edits"
+                            >
+                              <Undo2 className="h-3.5 w-3.5" /> Revert to Approved (CNO)
+                            </button>
+                          )}
+
+                          {/* Export scope selector */}
+                          <select
+                            title="Export scope"
+                            value={currentScope}
+                            onChange={(e) =>
+                              setExportScope((prev) => ({
+                                ...prev,
+                                [win.startDate]: e.target.value,
+                              }))
+                            }
+                            className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
                           >
-                            <Undo2 className="h-3.5 w-3.5" /> Revert to Approved (CNO)
-                          </button>
-                        )}
+                            <option value="">All Staff</option>
+                            {hasHeads && <option value="__HEAD__">Head Nurses</option>}
+                            {wardNames.map((w) => (
+                              <option key={w} value={w}>
+                                {w}
+                              </option>
+                            ))}
+                          </select>
                         <button
                           type="button"
                           disabled={!!isDownloading}
@@ -641,7 +709,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           {downloading === win.startDate + "-pdf" ? "Generating…" : "PDF"}
                         </button>
                       </>
-                    )}
+                    );
+                    })()}
                   </div>
                 )}
               </div>

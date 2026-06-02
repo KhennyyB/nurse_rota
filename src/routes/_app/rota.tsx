@@ -23,6 +23,7 @@ import {
   generateSchedule,
   nextInternWard,
   isInternType,
+  isGlobalHead,
   type ShiftCode,
   type NurseInput,
   type WardInput,
@@ -98,15 +99,18 @@ type GenForm = {
 };
 
 function RotaPage() {
-  const { canManageStaff, hasAnyRole, user } = useAuth();
+  const { canManageStaff, hasAnyRole, user, nurseFacility, isAdmin } = useAuth();
   const canEdit = canManageStaff;
   const canGenerate = hasAnyRole(["admin", "cno", "chief_matron"]);
   const qc = useQueryClient();
 
+  // Non-admin nurses are locked to their own facility.
+  const lockedFacility = !isAdmin && nurseFacility ? nurseFacility : null;
+
   // View state
   const [busy, setBusy] = useState(false);
   const [startOffset, setStartOffset] = useState(0);
-  const [selectedFacility, setSelectedFacility] = useState("");
+  const [selectedFacility, setSelectedFacility] = useState(lockedFacility ?? "");
   const [selectedWard, setSelectedWard] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -256,40 +260,94 @@ function RotaPage() {
     const genEnd = new Date(genStart);
     genEnd.setDate(genEnd.getDate() + DAYS - 1);
 
-    let targetNurses = nurses.filter((n) => n.facility === genForm.facility);
-    if (genForm.ward)
-      targetNurses = targetNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
+    const isWardRun = !!genForm.ward;
+    const facilityNurses = nurses.filter((n) => n.facility === genForm.facility);
+    const facilityHeads = facilityNurses.filter((n) => isGlobalHead(n.role));
+    const facilityInterns = facilityNurses.filter((n) => isInternType(n.role));
 
-    if (!targetNurses.length) {
-      toast.error("No staff found for the selected facility / ward");
+    // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards)
+    let wardNurses = facilityNurses.filter((n) => !isGlobalHead(n.role) && !isInternType(n.role));
+    if (isWardRun) {
+      wardNurses = wardNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
+    }
+
+    if (!wardNurses.length) {
+      toast.error(
+        isWardRun
+          ? `No staff assigned to ward "${genForm.ward}"`
+          : "No staff found for the selected facility",
+      );
       return;
     }
 
-    // Rotate intern ward assignments before generating if requested.
-    // Each intern advances to the next ward in the facility's ward list.
-    let schedulingNurses = targetNurses;
-    if (genForm.rotateInterns) {
+    // For ward runs: include head nurses and interns only if they have no
+    // existing assignments for this period (first ward run of the 28-day cycle).
+    // Subsequent ward runs keep their schedules untouched.
+    let includeHeads = !isWardRun;
+    let includeInterns = !isWardRun;
+
+    if (isWardRun) {
+      const [headsRes, internsRes] = await Promise.all([
+        facilityHeads.length > 0
+          ? supabase
+              .from("shift_assignments")
+              .select("id")
+              .in(
+                "nurse_id",
+                facilityHeads.map((n) => n.id),
+              )
+              .gte("shift_date", ymd(genStart))
+              .lte("shift_date", ymd(genEnd))
+              .limit(1)
+          : Promise.resolve({ data: [] as { id: string }[] }),
+        facilityInterns.length > 0
+          ? supabase
+              .from("shift_assignments")
+              .select("id")
+              .in(
+                "nurse_id",
+                facilityInterns.map((n) => n.id),
+              )
+              .gte("shift_date", ymd(genStart))
+              .lte("shift_date", ymd(genEnd))
+              .limit(1)
+          : Promise.resolve({ data: [] as { id: string }[] }),
+      ]);
+      includeHeads = (headsRes.data?.length ?? 0) === 0 && facilityHeads.length > 0;
+      includeInterns = (internsRes.data?.length ?? 0) === 0 && facilityInterns.length > 0;
+    }
+
+    // Apply intern rotation when generating a full-facility or first ward run
+    let internsToSchedule = facilityInterns;
+    if (includeInterns && genForm.rotateInterns) {
       const facilityWardNames = wards
-        .filter((w) =>
-          nurses.some(
-            (n) => n.facility === genForm.facility && parseWards(n.ward).includes(w.name),
-          ),
-        )
+        .filter((w) => facilityNurses.some((n) => parseWards(n.ward).includes(w.name)))
         .map((w) => w.name);
 
-      schedulingNurses = targetNurses.map((n) => {
-        if (!isInternType(n.role)) return n;
+      internsToSchedule = facilityInterns.map((n) => {
         const currentWard = parseWards(n.ward)[0] ?? null;
         const newWard = nextInternWard(currentWard, facilityWardNames);
         return { ...n, ward: newWard };
       });
 
-      // Persist the new ward assignments back to the database.
-      const updates = schedulingNurses
-        .filter((n) => isInternType(n.role))
-        .map((n) => supabase.from("nurses").update({ ward: n.ward }).eq("id", n.id));
+      const updates = internsToSchedule.map((n) =>
+        supabase.from("nurses").update({ ward: n.ward }).eq("id", n.id),
+      );
       await Promise.all(updates);
     }
+
+    const schedulingNurses = [
+      ...wardNurses,
+      ...(includeHeads ? facilityHeads : []),
+      ...(includeInterns ? internsToSchedule : []),
+    ];
+
+    const statusNote =
+      isWardRun && !includeHeads && !includeInterns
+        ? " (Head Nurses & Interns kept from previous run)"
+        : isWardRun && (includeHeads || includeInterns)
+          ? " (incl. Head Nurses & Interns — first run)"
+          : "";
 
     setGenOpen(false);
     setBusy(true);
@@ -303,12 +361,18 @@ function RotaPage() {
         facility: genForm.facility,
       });
 
-      await supabase
-        .from("shift_assignments")
-        .delete()
-        .gte("shift_date", ymd(genStart))
-        .lte("shift_date", ymd(genEnd))
-        .neq("status", "published");
+      // Scope the delete to only the nurses being regenerated in this run.
+      // Head nurse and intern assignments from a prior ward run are preserved.
+      const scheduledIds = schedulingNurses.map((n) => n.id);
+      for (let i = 0; i < scheduledIds.length; i += 200) {
+        await supabase
+          .from("shift_assignments")
+          .delete()
+          .gte("shift_date", ymd(genStart))
+          .lte("shift_date", ymd(genEnd))
+          .in("nurse_id", scheduledIds.slice(i, i + 200))
+          .neq("status", "published");
+      }
 
       const rows = draft.map((d) => ({
         ...d,
@@ -327,7 +391,9 @@ function RotaPage() {
         target: `${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""} · ${ymd(genStart)} → ${ymd(genEnd)}`,
       });
 
-      toast.success(`28-day draft generated for ${genForm.facility}`);
+      toast.success(
+        `28-day draft generated for ${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""}${statusNote}`,
+      );
       qc.invalidateQueries({ queryKey: ["assignments"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
@@ -454,21 +520,27 @@ function RotaPage() {
           </button>
         </div>
 
-        {/* Facility filter */}
-        <select
-          title="Facility"
-          value={selectedFacility}
-          onChange={(e) => {
-            setSelectedFacility(e.target.value);
-            setSelectedWard("");
-          }}
-          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">All Facilities</option>
-          {FACILITIES.map((f) => (
-            <option key={f}>{f}</option>
-          ))}
-        </select>
+        {/* Facility filter — locked for non-admin nurses */}
+        {lockedFacility ? (
+          <span className="h-9 px-3 rounded-md border bg-muted text-sm flex items-center font-medium text-muted-foreground">
+            {lockedFacility}
+          </span>
+        ) : (
+          <select
+            title="Facility"
+            value={selectedFacility}
+            onChange={(e) => {
+              setSelectedFacility(e.target.value);
+              setSelectedWard("");
+            }}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">All Facilities</option>
+            {FACILITIES.map((f) => (
+              <option key={f}>{f}</option>
+            ))}
+          </select>
+        )}
 
         {/* Ward filter */}
         <select
