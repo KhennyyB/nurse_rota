@@ -127,13 +127,56 @@ function RotaPage() {
   const draggingRef = useRef<Assignment | null>(null);
   const [dragging, setDragging] = useState<Assignment | null>(null);
 
+  // ── Auto-detect the active schedule window start ──────────────────────────
+  // Find the earliest shift_date in any upcoming (non-published) or current
+  // schedule so the view opens directly on the correct 28-day window.
+  const { data: scheduleWindowStart } = useQuery({
+    queryKey: ["schedule-window-start"],
+    queryFn: async () => {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = ymd(tomorrow);
+
+      // Prefer future/ongoing draft windows
+      const { data: future } = await supabase
+        .from("shift_assignments")
+        .select("shift_date")
+        .gte("shift_date", tomorrowStr)
+        .order("shift_date", { ascending: true })
+        .limit(1);
+      if (future?.[0]?.shift_date) return future[0].shift_date as string;
+
+      // Fall back to the most recent past assignment
+      const { data: past } = await supabase
+        .from("shift_assignments")
+        .select("shift_date")
+        .lt("shift_date", tomorrowStr)
+        .order("shift_date", { ascending: false })
+        .limit(1);
+      return (past?.[0]?.shift_date as string) ?? tomorrowStr;
+    },
+  });
+
   // ── Computed dates ────────────────────────────────────────────────────────
-  const startDate = useMemo(() => {
+  // Anchor to the detected schedule window; fall back to tomorrow.
+  // Navigation moves in full 28-day blocks.
+  const anchor = useMemo(() => {
+    if (scheduleWindowStart) {
+      const d = new Date(scheduleWindowStart + "T00:00:00");
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
     const t = new Date();
     t.setHours(0, 0, 0, 0);
-    t.setDate(t.getDate() + startOffset * 7);
+    t.setDate(t.getDate() + 1);
     return t;
-  }, [startOffset]);
+  }, [scheduleWindowStart]);
+
+  const startDate = useMemo(() => {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() + startOffset * DAYS);
+    return d;
+  }, [anchor, startOffset]);
 
   const endDate = useMemo(() => {
     const e = new Date(startDate);
@@ -385,9 +428,21 @@ function RotaPage() {
         created_by: user?.id ?? null,
         status: "draft" as const,
       }));
-      for (let i = 0; i < rows.length; i += 500) {
-        const { error } = await supabase.from("shift_assignments").insert(rows.slice(i, i + 500));
-        if (error) throw error;
+
+      // Use upsert with ignoreDuplicates so that if a published assignment already
+      // exists for a nurse+date (because the delete step skips published rows),
+      // the new draft row is silently skipped rather than causing a batch failure.
+      for (let i = 0; i < rows.length; i += 100) {
+        const { error } = await supabase
+          .from("shift_assignments")
+          .upsert(rows.slice(i, i + 100), {
+            onConflict: "nurse_id,shift_date",
+            ignoreDuplicates: true,
+          });
+        if (error) {
+          const msg = (error as { message?: string }).message ?? String(error);
+          throw new Error(msg);
+        }
       }
 
       await supabase.from("audit_logs").insert({
@@ -400,10 +455,12 @@ function RotaPage() {
       toast.success(
         `28-day draft generated for ${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""}${statusNote}`,
       );
-      qc.invalidateQueries({ queryKey: ["assignments"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
+      // Always refresh so the UI reflects the actual DB state,
+      // even if the generation partially failed.
+      qc.invalidateQueries({ queryKey: ["assignments"] });
       setBusy(false);
     }
   }
@@ -503,9 +560,9 @@ function RotaPage() {
         <div className="inline-flex rounded-md border bg-card">
           <button
             type="button"
-            onClick={() => setStartOffset((o) => o - 4)}
+            onClick={() => setStartOffset((o) => o - 1)}
             className="h-9 w-9 grid place-items-center hover:bg-muted"
-            title="Previous 4 weeks"
+            title="Previous 28-day period"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -513,14 +570,15 @@ function RotaPage() {
             type="button"
             onClick={() => setStartOffset(0)}
             className="px-3 text-xs font-medium hover:bg-muted"
+            title="Jump to active schedule"
           >
-            Today
+            Current
           </button>
           <button
             type="button"
-            onClick={() => setStartOffset((o) => o + 4)}
+            onClick={() => setStartOffset((o) => o + 1)}
             className="h-9 w-9 grid place-items-center hover:bg-muted"
-            title="Next 4 weeks"
+            title="Next 28-day period"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
