@@ -21,6 +21,8 @@ import { useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   generateSchedule,
+  nextInternWard,
+  isInternType,
   type ShiftCode,
   type NurseInput,
   type WardInput,
@@ -92,6 +94,7 @@ type GenForm = {
   startDate: string;
   facility: string;
   ward: string;
+  rotateInterns: boolean;
 };
 
 function RotaPage() {
@@ -113,6 +116,7 @@ function RotaPage() {
     startDate: todayYmd(),
     facility: "",
     ward: "",
+    rotateInterns: false,
   });
 
   // Drag — ref for event handlers (synchronous), state only for visual ring
@@ -238,7 +242,7 @@ function RotaPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    setGenForm({ startDate: ymd(startDate), facility: "", ward: "" });
+    setGenForm({ startDate: ymd(startDate), facility: "", ward: "", rotateInterns: false });
     setGenOpen(true);
   }
 
@@ -261,15 +265,42 @@ function RotaPage() {
       return;
     }
 
+    // Rotate intern ward assignments before generating if requested.
+    // Each intern advances to the next ward in the facility's ward list.
+    let schedulingNurses = targetNurses;
+    if (genForm.rotateInterns) {
+      const facilityWardNames = wards
+        .filter((w) =>
+          nurses.some(
+            (n) => n.facility === genForm.facility && parseWards(n.ward).includes(w.name),
+          ),
+        )
+        .map((w) => w.name);
+
+      schedulingNurses = targetNurses.map((n) => {
+        if (!isInternType(n.role)) return n;
+        const currentWard = parseWards(n.ward)[0] ?? null;
+        const newWard = nextInternWard(currentWard, facilityWardNames);
+        return { ...n, ward: newWard };
+      });
+
+      // Persist the new ward assignments back to the database.
+      const updates = schedulingNurses
+        .filter((n) => isInternType(n.role))
+        .map((n) => supabase.from("nurses").update({ ward: n.ward }).eq("id", n.id));
+      await Promise.all(updates);
+    }
+
     setGenOpen(false);
     setBusy(true);
     try {
       const draft = generateSchedule({
-        nurses: targetNurses,
+        nurses: schedulingNurses,
         wards,
         leave,
         startDate: genStart,
         days: DAYS,
+        facility: genForm.facility,
       });
 
       await supabase
@@ -798,9 +829,7 @@ function RotaPage() {
 
             {/* Ward */}
             <div>
-              <label className="block text-sm font-medium mb-1.5">
-                Ward <span className="text-destructive">*</span>
-              </label>
+              <label className="block text-sm font-medium mb-1.5">Ward</label>
               <select
                 title="Ward"
                 value={genForm.ward}
@@ -808,12 +837,28 @@ function RotaPage() {
                 disabled={!genForm.facility}
                 className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
               >
-                <option value="">Select ward…</option>
+                <option value="">All wards (full facility)</option>
                 {genWards.map((w) => (
                   <option key={w.name}>{w.name}</option>
                 ))}
               </select>
             </div>
+
+            {/* Rotate interns */}
+            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={genForm.rotateInterns}
+                onChange={(e) => setGenForm((f) => ({ ...f, rotateInterns: e.target.checked }))}
+                className="mt-0.5 h-4 w-4 rounded border accent-primary"
+              />
+              <span className="text-sm">
+                <span className="font-medium">Rotate intern departments</span>
+                <span className="block text-xs text-muted-foreground mt-0.5">
+                  Automatically move each intern to their next assigned ward for this 28-day cycle.
+                </span>
+              </span>
+            </label>
           </div>
 
           <DialogFooter>
@@ -825,7 +870,7 @@ function RotaPage() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={!genForm.facility || !genForm.ward || !genForm.startDate || busy}
+              disabled={!genForm.facility || !genForm.startDate || busy}
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />

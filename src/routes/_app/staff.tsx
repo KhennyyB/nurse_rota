@@ -48,11 +48,10 @@ const FACILITIES = [
 
 const NURSE_ROLES = [
   "Nurse",
+  "Senior Nurse",
   "Head Nurse",
   "Intern Nurse",
   "Nursing Assistant",
-  "Surgical Nurse",
-  "Porter",
 ] as const;
 
 function parseWards(ward: string | null): string[] {

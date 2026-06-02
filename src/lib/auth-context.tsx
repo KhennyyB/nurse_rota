@@ -18,6 +18,8 @@ interface AuthCtx {
   canDelete: boolean;
   canManageStaff: boolean;
   canApproveLeave: boolean;
+  canRequestShiftSwitch: boolean;
+  canApproveShiftSwitch: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -84,6 +86,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canDelete: hasRole("admin"),
     canManageStaff: hasAnyRole(["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canApproveLeave: hasAnyRole(["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canRequestShiftSwitch: hasAnyRole(["admin", "cno"]),
+    canApproveShiftSwitch: hasRole("admin"),
     signOut: async () => {
       await supabase.auth.signOut();
     },
