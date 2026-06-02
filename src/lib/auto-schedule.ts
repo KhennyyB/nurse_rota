@@ -84,7 +84,7 @@ type WardMins = Pick<
 // Ikoyi-specific minimum staffing per ward.
 // All wards include min_*_supervisor: 1 (experienced nurse as shift leader per shift).
 // Applied when facility === "Ikoyi", overriding database ward values.
-const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
+export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
   "IP Ward": {
     min_morning_nurses: 5,
     min_morning_supervisor: 1,
