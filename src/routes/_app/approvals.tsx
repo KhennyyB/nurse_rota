@@ -18,7 +18,7 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { isGlobalHead, isInternType } from "@/lib/auto-schedule";
+import { isGlobalHead } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -275,14 +275,14 @@ function ApprovalsPage() {
   async function revertPublished(win: RotaWindow) {
     if (
       !confirm(
-        "Revert this published rota back to 'Approved (CNO)' status?\n\nThis will unlock the rota for further edits and re-submission.",
+        "Unpublish this rota and return it to Draft?\n\nThe schedule data is kept exactly as published. You can edit it or auto-generate a new schedule from the Rota page.",
       )
     )
       return;
     setBusy(win.startDate);
     const { error } = await supabase
       .from("shift_assignments")
-      .update({ status: "approved_cno" })
+      .update({ status: "draft" })
       .gte("shift_date", win.startDate)
       .lte("shift_date", win.endDate)
       .eq("status", "published");
@@ -291,10 +291,10 @@ function ApprovalsPage() {
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
-      action: "Reverted published rota to Approved (CNO)",
+      action: "Unpublished rota — returned to Draft",
       target: `${win.startDate} → ${win.endDate}`,
     });
-    toast.success("Rota reverted — it is now editable again");
+    toast.success("Rota unpublished — schedule is unchanged and now editable");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
@@ -664,9 +664,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
                               disabled={isBusy}
                               onClick={() => revertPublished(win)}
                               className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
-                              title="Admin only — unlocks this rota for further edits"
+                              title="Admin only — returns schedule to Draft (data unchanged)"
                             >
-                              <Undo2 className="h-3.5 w-3.5" /> Revert to Approved (CNO)
+                              <Undo2 className="h-3.5 w-3.5" /> Unpublish to Draft
                             </button>
                           )}
 

@@ -330,8 +330,9 @@ function WardCard({
 
 // ── Add ward modal ────────────────────────────────────────────────────────────
 
-function AddWardModal({ facility, onClose }: { facility: string; onClose: () => void }) {
+function AddWardModal({ facility: defaultFacility, onClose }: { facility: string; onClose: () => void }) {
   const qc = useQueryClient();
+  const [selectedFac, setSelectedFac] = useState(defaultFacility || FACILITIES[0]);
   const [form, setForm] = useState({
     name: "",
     min_morning_nurses: 2,
@@ -346,7 +347,7 @@ function AddWardModal({ facility, onClose }: { facility: string; onClose: () => 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase.from("wards").insert({ ...form, facility });
+    const { error } = await supabase.from("wards").insert({ ...form, facility: selectedFac });
     setBusy(false);
     if (error) return toast.error(error.message);
     toast.success("Ward added");
@@ -361,6 +362,21 @@ function AddWardModal({ facility, onClose }: { facility: string; onClose: () => 
   return (
     <Modal title="Add ward" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label htmlFor="ward-facility" className="text-sm font-medium">
+            Facility
+          </label>
+          <select
+            id="ward-facility"
+            value={selectedFac}
+            onChange={(e) => setSelectedFac(e.target.value)}
+            className={inputCls}
+          >
+            {FACILITIES.map((f) => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+        </div>
         <div>
           <label htmlFor="ward-name" className="text-sm font-medium">
             Ward name

@@ -112,6 +112,7 @@ function RotaPage() {
   const [startOffset, setStartOffset] = useState(0);
   const [selectedFacility, setSelectedFacility] = useState(lockedFacility ?? "");
   const [selectedWard, setSelectedWard] = useState("");
+  const [selectedRole, setSelectedRole] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
   // Generate dialog
@@ -241,17 +242,26 @@ function RotaPage() {
     return m;
   }, [assignments]);
 
+  // Unique role values derived from the loaded nurses list (for the role filter dropdown).
+  const availableRoles = useMemo(
+    () => [...new Set(nurses.map((n) => n.role).filter(Boolean))].sort(),
+    [nurses],
+  );
+
   // View: nurses filtered by toolbar selects + search
   const filteredNurses = useMemo(() => {
     let list = nurses;
     if (selectedFacility) list = list.filter((n) => n.facility === selectedFacility);
-    if (selectedWard) list = list.filter((n) => parseWards(n.ward).includes(selectedWard));
+    // Head nurses cover all wards — always show them regardless of ward filter.
+    if (selectedWard)
+      list = list.filter((n) => isGlobalHead(n.role) || parseWards(n.ward).includes(selectedWard));
+    if (selectedRole) list = list.filter((n) => n.role === selectedRole);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((n) => n.name.toLowerCase().includes(q));
     }
     return list;
-  }, [nurses, selectedFacility, selectedWard, searchQuery]);
+  }, [nurses, selectedFacility, selectedWard, selectedRole, searchQuery]);
 
   // Generate dialog: wards that belong to nurses in the selected facility
   const genWards = useMemo(() => {
@@ -303,6 +313,10 @@ function RotaPage() {
   async function handleGenerate() {
     if (!genForm.facility) {
       toast.error("Select a facility");
+      return;
+    }
+    if (!genForm.ward) {
+      toast.error("Select a ward");
       return;
     }
 
@@ -367,18 +381,40 @@ function RotaPage() {
       includeInterns = (internsRes.data?.length ?? 0) === 0 && facilityInterns.length > 0;
     }
 
-    // Apply intern rotation when generating a full-facility or first ward run
+    // Apply intern rotation when generating a full-facility or first ward run.
+    // Sort interns by name for determinism, then distribute one per ward so each
+    // intern gets a unique ward. The base index advances by 1 each generation,
+    // giving a true round-robin rotation across 28-day periods.
     let internsToSchedule = facilityInterns;
     if (includeInterns && genForm.rotateInterns) {
       const facilityWardNames = wards
-        .filter((w) => facilityNurses.some((n) => parseWards(n.ward).includes(w.name)))
+        .filter((w) => {
+          const wf = (w as WardInput & { facility?: string | null }).facility;
+          return !wf || wf === genForm.facility;
+        })
         .map((w) => w.name);
 
-      internsToSchedule = facilityInterns.map((n) => {
-        const currentWard = parseWards(n.ward)[0] ?? null;
-        const newWard = nextInternWard(currentWard, facilityWardNames);
-        return { ...n, ward: newWard };
-      });
+      if (facilityWardNames.length > 0) {
+        const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
+        const firstWard = parseWards(sortedInterns[0]?.ward ?? null)[0] ?? null;
+        const curBase = firstWard
+          ? Math.max(0, facilityWardNames.indexOf(firstWard))
+          : facilityWardNames.length - 1;
+        const nextBase = (curBase + 1) % facilityWardNames.length;
+        internsToSchedule = sortedInterns.map((n, idx) => ({
+          ...n,
+          ward: facilityWardNames[(nextBase + idx) % facilityWardNames.length],
+        }));
+      } else {
+        internsToSchedule = facilityInterns.map((n) => {
+          const currentWard = parseWards(n.ward)[0] ?? null;
+          const newWard = nextInternWard(
+            currentWard,
+            wards.map((w) => w.name),
+          );
+          return { ...n, ward: newWard };
+        });
+      }
 
       const updates = internsToSchedule.map((n) =>
         supabase.from("nurses").update({ ward: n.ward }).eq("id", n.id),
@@ -457,6 +493,60 @@ function RotaPage() {
         if (error) {
           const msg = (error as { message?: string }).message ?? String(error);
           throw new Error(msg);
+        }
+      }
+
+      // Gap-fill: give every facility nurse a row for each day.
+      // Catches nurses added after the last full-facility run or missed by ward-specific runs.
+      // Only inserts for nurse+date pairs that have no existing row (never overwrites).
+      const coveredIds = new Set(scheduledIds);
+      const uncoveredNurses = facilityNurses.filter((n) => !coveredIds.has(n.id));
+      if (uncoveredNurses.length > 0) {
+        const uncoveredIds = uncoveredNurses.map((n) => n.id);
+        const { data: existingRows } = await supabase
+          .from("shift_assignments")
+          .select("nurse_id, shift_date")
+          .gte("shift_date", ymd(genStart))
+          .lte("shift_date", ymd(genEnd))
+          .in("nurse_id", uncoveredIds);
+        const existingKeys = new Set(
+          (existingRows ?? []).map(
+            (r: { nurse_id: string; shift_date: string }) => `${r.nurse_id}|${r.shift_date}`,
+          ),
+        );
+        const gapRows: {
+          nurse_id: string;
+          ward: string | null;
+          shift_date: string;
+          shift: "OFF" | "LEAVE";
+          status: "draft";
+          created_by: string | null;
+        }[] = [];
+        for (const nurse of uncoveredNurses) {
+          for (let d = 0; d < DAYS; d++) {
+            const dt = new Date(genStart);
+            dt.setDate(dt.getDate() + d);
+            const ds = ymd(dt);
+            if (existingKeys.has(`${nurse.id}|${ds}`)) continue;
+            const onLeave = leave.some(
+              (l) =>
+                l.nurse_id === nurse.id &&
+                l.status === "Approved" &&
+                l.from_date <= ds &&
+                l.to_date >= ds,
+            );
+            gapRows.push({
+              nurse_id: nurse.id,
+              ward: nurse.ward,
+              shift_date: ds,
+              shift: onLeave ? "LEAVE" : "OFF",
+              status: "draft",
+              created_by: user?.id ?? null,
+            });
+          }
+        }
+        for (let i = 0; i < gapRows.length; i += 100) {
+          await supabase.from("shift_assignments").insert(gapRows.slice(i, i + 100));
         }
       }
 
@@ -631,6 +721,21 @@ function RotaPage() {
           <option value="">All Wards</option>
           {wards.map((w) => (
             <option key={w.name}>{w.name}</option>
+          ))}
+        </select>
+
+        {/* Role filter */}
+        <select
+          title="Role"
+          value={selectedRole}
+          onChange={(e) => setSelectedRole(e.target.value)}
+          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">All Roles</option>
+          {availableRoles.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
           ))}
         </select>
 
@@ -980,7 +1085,9 @@ function RotaPage() {
 
             {/* Ward */}
             <div>
-              <label className="block text-sm font-medium mb-1.5">Ward</label>
+              <label className="block text-sm font-medium mb-1.5">
+                Ward <span className="text-destructive">*</span>
+              </label>
               <select
                 title="Ward"
                 value={genForm.ward}
@@ -988,7 +1095,7 @@ function RotaPage() {
                 disabled={!genForm.facility}
                 className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
               >
-                <option value="">All wards (full facility)</option>
+                <option value="">Select ward…</option>
                 {genWards.map((w) => (
                   <option key={w.name}>{w.name}</option>
                 ))}
@@ -1021,7 +1128,7 @@ function RotaPage() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={!genForm.facility || !genForm.startDate || busy}
+              disabled={!genForm.facility || !genForm.ward || !genForm.startDate || busy}
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />

@@ -5,12 +5,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
-import { Clock, PlayCircle, StopCircle, CheckCircle2, CalendarDays, Timer } from "lucide-react";
+import { Clock, PlayCircle, StopCircle, CheckCircle2, CalendarDays, Timer, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Progress } from "@/components/ui/progress";
 
 export const Route = createFileRoute("/_app/shift")({
   head: () => ({
-    meta: [{ title: "My Shift — Nurses Rota" }],
+    meta: [{ title: "Shift — Nurses Rota" }],
   }),
   component: ShiftPage,
 });
@@ -85,7 +86,12 @@ function hoursLogged(startedAt: string, endedAt: string) {
 }
 
 function ShiftPage() {
-  const { nurseId, fullName } = useAuth();
+  const { nurseId, fullName, activeRole } = useAuth();
+
+  // Management roles see all nurses' shift hours; regular nurses see personal tracker.
+  if (activeRole && activeRole !== "nurse") {
+    return <AllNursesShiftView />;
+  }
   const qc = useQueryClient();
   const today = todayYmd();
   const [now, setNow] = useState(new Date());
@@ -258,7 +264,7 @@ function ShiftPage() {
     if (error) return toast.error(error.message);
 
     // Accumulate hours into nurses.hours_this_month
-    await supabase.rpc("increment_nurse_hours", { p_nurse_id: nurseId, p_hours: hours });
+    if (nurseId) await supabase.rpc("increment_nurse_hours", { p_nurse_id: nurseId, p_hours: hours });
 
     if (!isAuto) toast.success(`Shift ended — ${fmtHours(hours)} logged`);
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
@@ -463,6 +469,165 @@ function ShiftPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── All-nurses shift hours view (admin / management roles) ────────────────────
+
+type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null; target_hours: number };
+type AllShiftLog = { nurse_id: string; hours_logged: number | null; shift_date: string; shift_type: string; started_at: string; ended_at: string | null };
+
+function AllNursesShiftView() {
+  const [search, setSearch] = useState("");
+
+  const lookback = new Date();
+  lookback.setDate(lookback.getDate() - 27);
+  const lbStr = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
+
+  const { data: nurses = [] } = useQuery<NurseRow[]>({
+    queryKey: ["nurses"],
+    queryFn: async () => ((await supabase.from("nurses").select("id,name,role,ward,facility,target_hours").order("name")).data ?? []) as NurseRow[],
+  });
+
+  const { data: logs = [] } = useQuery<AllShiftLog[]>({
+    queryKey: ["all-shift-logs-current"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_logs")
+        .select("nurse_id,hours_logged,shift_date,shift_type,started_at,ended_at")
+        .gte("shift_date", lbStr)
+        .order("shift_date", { ascending: false });
+      return (data ?? []) as AllShiftLog[];
+    },
+  });
+
+  // Build per-nurse totals
+  const hoursMap = new Map<string, number>();
+  const shiftsMap = new Map<string, number>();
+  const activeMap = new Map<string, boolean>(); // currently running
+  for (const l of logs) {
+    if (l.hours_logged != null) {
+      hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + l.hours_logged);
+      shiftsMap.set(l.nurse_id, (shiftsMap.get(l.nurse_id) ?? 0) + 1);
+    } else if (!l.ended_at) {
+      activeMap.set(l.nurse_id, true);
+    }
+  }
+
+  const filtered = nurses.filter((n) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return n.name.toLowerCase().includes(q) || (n.ward ?? "").toLowerCase().includes(q) || (n.facility ?? "").toLowerCase().includes(q);
+  });
+
+  const totalHours = [...hoursMap.values()].reduce((s, h) => s + h, 0);
+  const activeCount = activeMap.size;
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Shift Hours"
+        subtitle="All staff · current 28-day period"
+      />
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-card border rounded-xl p-5 shadow-soft">
+          <div className="flex items-center gap-2 mb-1 text-muted-foreground">
+            <Users className="h-4 w-4" />
+            <p className="text-xs uppercase tracking-wide font-medium">Total staff</p>
+          </div>
+          <p className="text-3xl font-bold">{nurses.length}</p>
+        </div>
+        <div className="bg-card border rounded-xl p-5 shadow-soft">
+          <div className="flex items-center gap-2 mb-1 text-muted-foreground">
+            <Timer className="h-4 w-4" />
+            <p className="text-xs uppercase tracking-wide font-medium">Hours logged</p>
+          </div>
+          <p className="text-3xl font-bold">{fmtHours(totalHours)}</p>
+          <p className="text-xs text-muted-foreground mt-1">this 28-day period</p>
+        </div>
+        <div className="bg-card border rounded-xl p-5 shadow-soft">
+          <div className="flex items-center gap-2 mb-1 text-muted-foreground">
+            <Clock className="h-4 w-4" />
+            <p className="text-xs uppercase tracking-wide font-medium">Active now</p>
+          </div>
+          <p className="text-3xl font-bold text-emerald-600">{activeCount}</p>
+          <p className="text-xs text-muted-foreground mt-1">shifts in progress</p>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="flex items-center gap-3">
+        <input
+          type="search"
+          placeholder="Search by name, ward or facility…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-9 px-3 w-72 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        />
+        <span className="text-xs text-muted-foreground">{filtered.length} staff</span>
+      </div>
+
+      {/* Table */}
+      <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+              <th className="text-left px-4 py-3 font-semibold">Ward</th>
+              <th className="text-left px-4 py-3 font-semibold">Facility</th>
+              <th className="text-right px-4 py-3 font-semibold">Shifts</th>
+              <th className="text-right px-4 py-3 font-semibold">Hours</th>
+              <th className="text-left px-4 py-3 font-semibold w-40">Progress</th>
+              <th className="text-left px-4 py-3 font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((n) => {
+              const hrs = hoursMap.get(n.id) ?? 0;
+              const shifts = shiftsMap.get(n.id) ?? 0;
+              const target = n.target_hours || 160;
+              const pct = Math.min(Math.round((hrs / target) * 100), 100);
+              const isActive = activeMap.get(n.id) ?? false;
+              return (
+                <tr key={n.id} className="border-t hover:bg-muted/30">
+                  <td className="px-4 py-3">
+                    <p className="font-medium">{n.name}</p>
+                    <p className="text-xs text-muted-foreground">{n.role}</p>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{n.ward?.split("|")[0] ?? "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{n.facility ?? "—"}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{shifts}</td>
+                  <td className="px-4 py-3 text-right tabular-nums font-semibold">
+                    {fmtHours(hrs)}
+                    <span className="text-xs font-normal text-muted-foreground ml-1">/ {target}h</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="h-2 rounded-full bg-muted overflow-hidden w-32">
+                      <Progress value={pct} className="h-full rounded-full" />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{pct}%</p>
+                  </td>
+                  <td className="px-4 py-3">
+                    {isActive ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Active
+                      </span>
+                    ) : hrs > 0 ? (
+                      <span className="text-xs text-muted-foreground">Logged hours</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">No logs yet</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

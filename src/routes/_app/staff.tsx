@@ -959,7 +959,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
 
       // Assign selected role and ensure profile is linked to this nurse's name.
       await Promise.all([
-        supabase.from("user_roles").insert({ user_id: userId, role }),
+        supabase.from("user_roles").insert({ user_id: userId, role: role as import("@/integrations/supabase/types").Database["public"]["Enums"]["app_role"] }),
         supabase.from("profiles").upsert({
           id: userId,
           full_name: nurse.name,
