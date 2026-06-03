@@ -433,12 +433,10 @@ function RotaPage() {
       // exists for a nurse+date (because the delete step skips published rows),
       // the new draft row is silently skipped rather than causing a batch failure.
       for (let i = 0; i < rows.length; i += 100) {
-        const { error } = await supabase
-          .from("shift_assignments")
-          .upsert(rows.slice(i, i + 100), {
-            onConflict: "nurse_id,shift_date",
-            ignoreDuplicates: true,
-          });
+        const { error } = await supabase.from("shift_assignments").upsert(rows.slice(i, i + 100), {
+          onConflict: "nurse_id,shift_date",
+          ignoreDuplicates: true,
+        });
         if (error) {
           const msg = (error as { message?: string }).message ?? String(error);
           throw new Error(msg);

@@ -51,16 +51,8 @@ export async function appBeforeLoad() {
 
 export function AppShell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const {
-    user,
-    fullName,
-    roles,
-    activeRole,
-    needsRoleSelection,
-    selectRole,
-    signOut,
-    loading,
-  } = useAuth();
+  const { user, fullName, roles, activeRole, needsRoleSelection, selectRole, signOut, loading } =
+    useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
@@ -95,9 +87,9 @@ export function AppShell() {
     .join("");
 
   return (
-    <div className="min-h-screen flex bg-background text-foreground">
-      {/* Sidebar — desktop */}
-      <aside className="hidden lg:flex w-64 shrink-0 bg-sidebar text-sidebar-foreground flex-col">
+    <div className="h-screen flex overflow-hidden bg-background text-foreground">
+      {/* Sidebar — desktop: fixed height, never scrolls */}
+      <aside className="hidden lg:flex w-64 shrink-0 bg-sidebar text-sidebar-foreground flex-col h-screen">
         <SidebarContent path={path} items={visibleNav} />
         <UserBlock fullName={fullName} role={primaryRole} signOut={signOut} />
       </aside>
@@ -117,7 +109,7 @@ export function AppShell() {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <header className="h-16 border-b bg-card flex items-center px-3 sm:px-6 gap-2 sm:gap-4 sticky top-0 z-30">
           <button
             onClick={() => setOpen(true)}
@@ -139,7 +131,7 @@ export function AppShell() {
             {initials || "U"}
           </div>
         </header>
-        <main className="flex-1 p-4 sm:p-6 overflow-x-hidden">
+        <main className="flex-1 p-4 sm:p-6">
           <Outlet />
         </main>
       </div>
@@ -204,9 +196,7 @@ function RoleSelectionScreen({
             </option>
           ))}
         </select>
-        <p className="mt-2 min-h-10 text-xs text-muted-foreground">
-          {ROLE_DESCRIPTIONS[selected]}
-        </p>
+        <p className="mt-2 min-h-10 text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[selected]}</p>
 
         <button
           type="submit"

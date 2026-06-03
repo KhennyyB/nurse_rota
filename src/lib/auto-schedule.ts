@@ -294,9 +294,7 @@ function enforceMinima(
     date.setDate(date.getDate() + d);
     const dateStr = ymd(date);
 
-    const dayAssignments = out.filter(
-      (a) => a.shift_date === dateStr && nurseById.has(a.nurse_id),
-    );
+    const dayAssignments = out.filter((a) => a.shift_date === dateStr && nurseById.has(a.nurse_id));
 
     const countOnShift = (shift: ShiftCode, roleTest: (r: string) => boolean) =>
       dayAssignments.filter(
