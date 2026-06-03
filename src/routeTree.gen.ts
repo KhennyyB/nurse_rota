@@ -15,6 +15,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppWardsRouteImport } from './routes/_app/wards'
 import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppStaffRouteImport } from './routes/_app/staff'
+import { Route as AppShiftRouteImport } from './routes/_app/shift'
 import { Route as AppRotaRouteImport } from './routes/_app/rota'
 import { Route as AppReportsRouteImport } from './routes/_app/reports'
 import { Route as AppPermissionsRouteImport } from './routes/_app/permissions'
@@ -49,6 +50,11 @@ const AppUsersRoute = AppUsersRouteImport.update({
 const AppStaffRoute = AppStaffRouteImport.update({
   id: '/staff',
   path: '/staff',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppShiftRoute = AppShiftRouteImport.update({
+  id: '/shift',
+  path: '/shift',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRotaRoute = AppRotaRouteImport.update({
@@ -91,6 +97,7 @@ export interface FileRoutesByFullPath {
   '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
   '/rota': typeof AppRotaRoute
+  '/shift': typeof AppShiftRoute
   '/staff': typeof AppStaffRoute
   '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
   '/rota': typeof AppRotaRoute
+  '/shift': typeof AppShiftRoute
   '/staff': typeof AppStaffRoute
   '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/_app/permissions': typeof AppPermissionsRoute
   '/_app/reports': typeof AppReportsRoute
   '/_app/rota': typeof AppRotaRoute
+  '/_app/shift': typeof AppShiftRoute
   '/_app/staff': typeof AppStaffRoute
   '/_app/users': typeof AppUsersRoute
   '/_app/wards': typeof AppWardsRoute
@@ -134,6 +143,7 @@ export interface FileRouteTypes {
     | '/permissions'
     | '/reports'
     | '/rota'
+    | '/shift'
     | '/staff'
     | '/users'
     | '/wards'
@@ -146,6 +156,7 @@ export interface FileRouteTypes {
     | '/permissions'
     | '/reports'
     | '/rota'
+    | '/shift'
     | '/staff'
     | '/users'
     | '/wards'
@@ -160,6 +171,7 @@ export interface FileRouteTypes {
     | '/_app/permissions'
     | '/_app/reports'
     | '/_app/rota'
+    | '/_app/shift'
     | '/_app/staff'
     | '/_app/users'
     | '/_app/wards'
@@ -215,6 +227,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStaffRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/shift': {
+      id: '/_app/shift'
+      path: '/shift'
+      fullPath: '/shift'
+      preLoaderRoute: typeof AppShiftRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/rota': {
       id: '/_app/rota'
       path: '/rota'
@@ -267,6 +286,7 @@ interface AppRouteChildren {
   AppPermissionsRoute: typeof AppPermissionsRoute
   AppReportsRoute: typeof AppReportsRoute
   AppRotaRoute: typeof AppRotaRoute
+  AppShiftRoute: typeof AppShiftRoute
   AppStaffRoute: typeof AppStaffRoute
   AppUsersRoute: typeof AppUsersRoute
   AppWardsRoute: typeof AppWardsRoute
@@ -280,6 +300,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppPermissionsRoute: AppPermissionsRoute,
   AppReportsRoute: AppReportsRoute,
   AppRotaRoute: AppRotaRoute,
+  AppShiftRoute: AppShiftRoute,
   AppStaffRoute: AppStaffRoute,
   AppUsersRoute: AppUsersRoute,
   AppWardsRoute: AppWardsRoute,

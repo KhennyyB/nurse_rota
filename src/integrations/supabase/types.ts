@@ -198,6 +198,85 @@ export type Database = {
           },
         ];
       };
+      shift_logs: {
+        Row: {
+          id: string;
+          nurse_id: string;
+          shift_date: string;
+          shift_type: Database["public"]["Enums"]["shift_code"];
+          started_at: string;
+          expected_end_at: string;
+          ended_at: string | null;
+          hours_logged: number | null;
+          period_start: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          nurse_id: string;
+          shift_date: string;
+          shift_type: Database["public"]["Enums"]["shift_code"];
+          started_at: string;
+          expected_end_at: string;
+          ended_at?: string | null;
+          hours_logged?: number | null;
+          period_start: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          nurse_id?: string;
+          shift_date?: string;
+          shift_type?: Database["public"]["Enums"]["shift_code"];
+          started_at?: string;
+          expected_end_at?: string;
+          ended_at?: string | null;
+          hours_logged?: number | null;
+          period_start?: string;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "shift_logs_nurse_id_fkey";
+            columns: ["nurse_id"];
+            isOneToOne: false;
+            referencedRelation: "nurses";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      nurse_period_hours: {
+        Row: {
+          nurse_id: string;
+          period_start: string;
+          period_end: string;
+          total_hours: number;
+          total_shifts: number;
+        };
+        Insert: {
+          nurse_id: string;
+          period_start: string;
+          period_end: string;
+          total_hours: number;
+          total_shifts: number;
+        };
+        Update: {
+          nurse_id?: string;
+          period_start?: string;
+          period_end?: string;
+          total_hours?: number;
+          total_shifts?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "nurse_period_hours_nurse_id_fkey";
+            columns: ["nurse_id"];
+            isOneToOne: false;
+            referencedRelation: "nurses";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       user_roles: {
         Row: {
           created_at: string;
@@ -285,6 +364,21 @@ export type Database = {
           _user_id: string;
         };
         Returns: boolean;
+      };
+      get_my_roles: {
+        Args: Record<string, never>;
+        Returns: string[];
+      };
+      get_my_profile: {
+        Args: Record<string, never>;
+        Returns: { full_name: string | null }[];
+      };
+      increment_nurse_hours: {
+        Args: {
+          p_nurse_id: string;
+          p_hours: number;
+        };
+        Returns: null;
       };
     };
     Enums: {

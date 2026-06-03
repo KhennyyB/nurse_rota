@@ -16,6 +16,7 @@ import {
   KeyRound,
   UserCog,
   LogIn,
+  Timer,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, roles: ALL },
   { to: "/rota", label: "Rota", icon: CalendarDays, roles: ALL },
+  { to: "/shift", label: "My Shift", icon: Timer, roles: ALL },
   { to: "/staff", label: "Staff", icon: Users, roles: MANAGERS },
   { to: "/wards", label: "Wards", icon: Building2, roles: MANAGERS },
   { to: "/leave", label: "Leave & Requests", icon: PlaneTakeoff, roles: ALL },

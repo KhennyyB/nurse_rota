@@ -12,6 +12,7 @@ interface AuthCtx {
   activeRole: AppRole | null;
   fullName: string | null;
   nurseFacility: string | null;
+  nurseId: string | null;
   loading: boolean;
   needsRoleSelection: boolean;
   selectRole: (role: AppRole) => void;
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeRole, setActiveRole] = useState<AppRole | null>(null);
   const [fullName, setFullName] = useState<string | null>(null);
   const [nurseFacility, setNurseFacility] = useState<string | null>(null);
+  const [nurseId, setNurseId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -58,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setActiveRole(null);
         setFullName(null);
         setNurseFacility(null);
+        setNurseId(null);
       }
     });
 
@@ -102,18 +105,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (name) {
         const { data: nurseRow } = await supabase
           .from("nurses")
-          .select("facility")
+          .select("id, facility")
           .eq("name", name)
           .maybeSingle();
         setNurseFacility(nurseRow?.facility ?? null);
+        setNurseId(nurseRow?.id ?? null);
       } else {
         setNurseFacility(null);
+        setNurseId(null);
       }
     } catch {
       setRoles([]);
       setActiveRole(null);
       setFullName(null);
       setNurseFacility(null);
+      setNurseId(null);
     }
   }
 
@@ -134,6 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     activeRole,
     fullName,
     nurseFacility,
+    nurseId,
     loading,
     needsRoleSelection: roles.length > 1 && activeRole === null,
     selectRole,
@@ -150,6 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signOut: async () => {
       if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
       setActiveRole(null);
+      setNurseId(null);
       await supabase.auth.signOut();
     },
   };
