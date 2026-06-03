@@ -49,6 +49,11 @@ const NURSE_ROLES = [
   "Nursing Assistant",
 ] as const;
 
+// Head Nurses and Intern Nurses are scheduled independently — no ward is tagged.
+function isNoWardRole(role: string) {
+  return /^head\s*nurse$|^intern\s*nurse$|^nurse\s*intern$/i.test(role);
+}
+
 function parseWards(ward: string | null): string[] {
   if (!ward) return [];
   return ward.split("|").filter(Boolean);
@@ -73,6 +78,9 @@ function StaffPage() {
   const { canManageStaff, canCreateLogin } = useAuth();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [filterRole, setFilterRole] = useState("");
+  const [filterFacility, setFilterFacility] = useState("");
+  const [filterWard, setFilterWard] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [editingNurse, setEditingNurse] = useState<Nurse | null>(null);
@@ -119,12 +127,27 @@ function StaffPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const filtered = nurses.filter((n) =>
-    [n.name, n.role, n.facility ?? "", ...parseWards(n.ward)]
-      .join(" ")
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
+  const filtered = nurses.filter((n) => {
+    if (
+      search &&
+      !`${n.name} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase())
+    )
+      return false;
+    if (filterRole && n.role !== filterRole) return false;
+    if (filterFacility && n.facility !== filterFacility) return false;
+    if (filterWard && !parseWards(n.ward).includes(filterWard)) return false;
+    return true;
+  });
+
+  const activeFilters = [filterRole, filterFacility, filterWard].filter(Boolean).length;
+  const clearFilters = () => {
+    setFilterRole("");
+    setFilterFacility("");
+    setFilterWard("");
+    setSearch("");
+  };
 
   const wardNames = wards.map((w) => w.name);
 
@@ -156,18 +179,84 @@ function StaffPage() {
         }
       />
 
-      <div className="bg-card border rounded-xl shadow-soft mb-4 p-3 flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+      <div className="bg-card border rounded-xl shadow-soft mb-4 p-3 flex flex-wrap items-center gap-2">
+        {/* Name search */}
+        <div className="relative min-w-44 flex-1">
+          <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <input
             type="search"
             aria-label="Search staff"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full h-9 pl-9 pr-3 rounded-md bg-muted/60 text-sm outline-none focus:ring-2 focus:ring-ring"
-            placeholder="Search staff..."
+            placeholder="Search by name…"
           />
         </div>
+
+        {/* Role filter */}
+        <select
+          aria-label="Filter by role"
+          value={filterRole}
+          onChange={(e) => setFilterRole(e.target.value)}
+          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">All roles</option>
+          {NURSE_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+
+        {/* Facility filter */}
+        <select
+          aria-label="Filter by facility"
+          value={filterFacility}
+          onChange={(e) => setFilterFacility(e.target.value)}
+          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">All facilities</option>
+          {FACILITIES.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+
+        {/* Ward filter */}
+        <select
+          aria-label="Filter by ward"
+          value={filterWard}
+          onChange={(e) => setFilterWard(e.target.value)}
+          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">All wards</option>
+          {wardNames.map((w) => (
+            <option key={w} value={w}>
+              {w}
+            </option>
+          ))}
+        </select>
+
+        {/* Clear filters */}
+        {(activeFilters > 0 || search) && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted text-muted-foreground"
+          >
+            <X className="h-3.5 w-3.5" /> Clear
+            {activeFilters > 0 && (
+              <span className="ml-0.5 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[10px] grid place-items-center font-bold">
+                {activeFilters}
+              </span>
+            )}
+          </button>
+        )}
+
+        <span className="ml-auto text-xs text-muted-foreground whitespace-nowrap">
+          {filtered.length} of {nurses.length}
+        </span>
       </div>
 
       {isLoading ? (
@@ -215,10 +304,12 @@ function StaffPage() {
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
                   <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">Hours</th>
-                  {canCreateLogin && (
-                    <th className="text-center font-semibold px-4 py-3">Login</th>
+                  {canCreateLogin && <th className="text-center font-semibold px-4 py-3">Login</th>}
+                  {canManageStaff && (
+                    <th className="px-4 py-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   )}
-                  {canManageStaff && <th className="px-4 py-3" aria-label="Actions"></th>}
                 </tr>
               </thead>
               <tbody>
@@ -241,7 +332,11 @@ function StaffPage() {
                       {n.facility ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {parseWards(n.ward).join(", ") || "—"}
+                      {isNoWardRole(n.role) ? (
+                        <span className="text-xs italic opacity-50">—</span>
+                      ) : (
+                        parseWards(n.ward).join(", ") || "—"
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
                       {n.hours_this_month}/{n.target_hours}
@@ -401,12 +496,17 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
   const [nurseWards, setNurseWards] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
+  const noWard = isNoWardRole(role);
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase
-      .from("nurses")
-      .insert({ name, role, facility: facility || null, ward: formatWards(nurseWards) });
+    const { error } = await supabase.from("nurses").insert({
+      name,
+      role,
+      facility: facility || null,
+      ward: noWard ? null : formatWards(nurseWards),
+    });
     setBusy(false);
     if (error) return toast.error(error.message);
     toast.success("Nurse added");
@@ -434,7 +534,10 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             id="nurse-role"
             title="Role"
             value={role}
-            onChange={(e) => setRole(e.target.value)}
+            onChange={(e) => {
+              setRole(e.target.value);
+              setNurseWards([]);
+            }}
             className={inputCls}
           >
             {NURSE_ROLES.map((r) => (
@@ -456,7 +559,13 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             ))}
           </select>
         </Field>
-        <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+        {noWard ? (
+          <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2">
+            Ward assignment is not applicable for {role}s — their schedule is managed independently.
+          </p>
+        ) : (
+          <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
@@ -494,12 +603,19 @@ function EditNurseModal({
   const [nurseWards, setNurseWards] = useState<string[]>(parseWards(nurse.ward));
   const [busy, setBusy] = useState(false);
 
+  const noWard = isNoWardRole(role);
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     const { error } = await supabase
       .from("nurses")
-      .update({ name, role, facility: facility || null, ward: formatWards(nurseWards) })
+      .update({
+        name,
+        role,
+        facility: facility || null,
+        ward: noWard ? null : formatWards(nurseWards),
+      })
       .eq("id", nurse.id);
     setBusy(false);
     if (error) return toast.error(error.message);
@@ -528,7 +644,10 @@ function EditNurseModal({
             id="edit-role"
             title="Role"
             value={role}
-            onChange={(e) => setRole(e.target.value)}
+            onChange={(e) => {
+              setRole(e.target.value);
+              setNurseWards([]);
+            }}
             className={inputCls}
           >
             {NURSE_ROLES.map((r) => (
@@ -550,7 +669,13 @@ function EditNurseModal({
             ))}
           </select>
         </Field>
-        <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+        {noWard ? (
+          <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2">
+            Ward assignment is not applicable for {role}s — their schedule is managed independently.
+          </p>
+        ) : (
+          <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
@@ -860,8 +985,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
     <Modal title={`Create login — ${nurse.name}`} onClose={onClose}>
       <p className="text-sm text-muted-foreground mb-4">
         Creates a system account. The user will log in with the email and password below. Their
-        dashboard will be scoped to the{" "}
-        <strong>{nurse.facility ?? "assigned"}</strong> facility.
+        dashboard will be scoped to the <strong>{nurse.facility ?? "assigned"}</strong> facility.
       </p>
       <form onSubmit={submit} className="space-y-4">
         <div>
@@ -929,11 +1053,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
             disabled={busy || !email || !password}
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50"
           >
-            {busy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <KeyRound className="h-3 w-3" />
-            )}
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
             Create login
           </button>
         </div>
