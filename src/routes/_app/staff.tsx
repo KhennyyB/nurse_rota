@@ -17,7 +17,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@supabase/supabase-js";
+import { adminCreateUser } from "@/integrations/supabase/admin-client";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -933,33 +933,15 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
     }
     setBusy(true);
     try {
-      // Use a separate client instance so the admin's session is not replaced.
-      const tempClient = createClient(
-        import.meta.env.VITE_SUPABASE_URL as string,
-        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
-        { auth: { persistSession: false, autoRefreshToken: false } },
-      );
+      // adminCreateUser uses the service-role key — creates the account
+      // instantly with email already confirmed. No confirmation email is sent.
+      const userId = await adminCreateUser({ email, password, fullName: nurse.name });
 
-      const { data, error: signUpError } = await tempClient.auth.signUp({
-        email,
-        password,
-        options: { data: { full_name: nurse.name } },
-      });
-
-      if (signUpError) {
-        toast.error(signUpError.message);
-        return;
-      }
-
-      const userId = data.user?.id;
-      if (!userId) {
-        toast.error("Account created but user ID was not returned — check your email.");
-        return;
-      }
-
-      // Assign selected role and ensure profile is linked to this nurse's name.
       await Promise.all([
-        supabase.from("user_roles").insert({ user_id: userId, role: role as import("@/integrations/supabase/types").Database["public"]["Enums"]["app_role"] }),
+        supabase.from("user_roles").insert({
+          user_id: userId,
+          role: role as import("@/integrations/supabase/types").Database["public"]["Enums"]["app_role"],
+        }),
         supabase.from("profiles").upsert({
           id: userId,
           full_name: nurse.name,
@@ -969,7 +951,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
       ]);
 
       logAudit("Created login", `${nurse.name} (${email}) — role: ${role}`);
-      toast.success(`Login created for ${nurse.name}`);
+      toast.success(`Login created for ${nurse.name} — can log in immediately`);
       onClose();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to create login");

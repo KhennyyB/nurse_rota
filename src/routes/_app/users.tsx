@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { createClient } from "@supabase/supabase-js";
+import { adminCreateUser } from "@/integrations/supabase/admin-client";
 import { useState } from "react";
 import { Users, Search, Plus, Trash2, Shield, UserCog, Loader2, X } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
@@ -177,7 +177,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
   });
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.SyntheticEvent) {
     e.preventDefault();
     if (form.password.length < 8) {
       toast.error("Password must be at least 8 characters");
@@ -185,29 +185,13 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
     }
     setBusy(true);
     try {
-      // Use a separate client so the admin's own session is not replaced.
-      const tempClient = createClient(
-        import.meta.env.VITE_SUPABASE_URL as string,
-        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
-        { auth: { persistSession: false, autoRefreshToken: false } },
-      );
-
-      const { data, error: signUpError } = await tempClient.auth.signUp({
+      // adminCreateUser uses the service-role key — creates the account
+      // instantly with email already confirmed. No confirmation email is sent.
+      const userId = await adminCreateUser({
         email: form.email,
         password: form.password,
-        options: { data: { full_name: form.fullName || form.email } },
+        fullName: form.fullName,
       });
-
-      if (signUpError) {
-        toast.error(signUpError.message);
-        return;
-      }
-
-      const userId = data.user?.id;
-      if (!userId) {
-        toast.error("Account created but no user ID returned — check your email.");
-        return;
-      }
 
       await Promise.all([
         supabase.from("user_roles").insert({
@@ -222,7 +206,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
         }),
       ]);
 
-      toast.success(`User created — ${form.email}`);
+      toast.success(`User created — ${form.email} can log in immediately`);
       onCreated();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to create user");
