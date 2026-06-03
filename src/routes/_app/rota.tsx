@@ -128,32 +128,39 @@ function RotaPage() {
   const [dragging, setDragging] = useState<Assignment | null>(null);
 
   // ── Auto-detect the active schedule window start ──────────────────────────
-  // Find the earliest shift_date in any upcoming (non-published) or current
-  // schedule so the view opens directly on the correct 28-day window.
+  // Strategy: a 28-day window started at most 27 days ago still contains today.
+  // Search backwards 27 days for the earliest assignment — that is the window start.
+  // If none found in that range, fall forward to the next upcoming window.
   const { data: scheduleWindowStart } = useQuery({
     queryKey: ["schedule-window-start"],
     queryFn: async () => {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = ymd(tomorrow);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = ymd(today);
 
-      // Prefer future/ongoing draft windows
+      const lookback = new Date(today);
+      lookback.setDate(lookback.getDate() - 27);
+      const lookbackStr = ymd(lookback);
+
+      // Earliest assignment within the past 27 days = start of the active window.
+      // Gaps between schedules (days with no assignments) ensure we don't bleed
+      // into a previous finished window.
+      const { data: current } = await supabase
+        .from("shift_assignments")
+        .select("shift_date")
+        .gte("shift_date", lookbackStr)
+        .order("shift_date", { ascending: true })
+        .limit(1);
+      if (current?.[0]?.shift_date) return current[0].shift_date as string;
+
+      // No active window — snap forward to the next upcoming one
       const { data: future } = await supabase
         .from("shift_assignments")
         .select("shift_date")
-        .gte("shift_date", tomorrowStr)
+        .gt("shift_date", todayStr)
         .order("shift_date", { ascending: true })
         .limit(1);
-      if (future?.[0]?.shift_date) return future[0].shift_date as string;
-
-      // Fall back to the most recent past assignment
-      const { data: past } = await supabase
-        .from("shift_assignments")
-        .select("shift_date")
-        .lt("shift_date", tomorrowStr)
-        .order("shift_date", { ascending: false })
-        .limit(1);
-      return (past?.[0]?.shift_date as string) ?? tomorrowStr;
+      return (future?.[0]?.shift_date as string) ?? todayStr;
     },
   });
 
@@ -423,20 +430,30 @@ function RotaPage() {
           .neq("status", "published");
       }
 
-      const rows = draft.map((d) => ({
-        ...d,
-        created_by: user?.id ?? null,
-        status: "draft" as const,
-      }));
+      // Find nurse+date pairs that still have a published row after the delete step.
+      // We cannot overwrite published rows, so we exclude them from the insert.
+      const publishedKeys = new Set<string>();
+      for (let i = 0; i < scheduledIds.length; i += 200) {
+        const { data: pubRows } = await supabase
+          .from("shift_assignments")
+          .select("nurse_id, shift_date")
+          .gte("shift_date", ymd(genStart))
+          .lte("shift_date", ymd(genEnd))
+          .in("nurse_id", scheduledIds.slice(i, i + 200))
+          .eq("status", "published");
+        (pubRows ?? []).forEach((r: { nurse_id: string; shift_date: string }) =>
+          publishedKeys.add(`${r.nurse_id}|${r.shift_date}`),
+        );
+      }
 
-      // Use upsert with ignoreDuplicates so that if a published assignment already
-      // exists for a nurse+date (because the delete step skips published rows),
-      // the new draft row is silently skipped rather than causing a batch failure.
+      const rows = draft
+        .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
+        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+
+      // Plain insert — no unique-constraint dependency.
+      // The delete + published-key filter above guarantees no conflicts.
       for (let i = 0; i < rows.length; i += 100) {
-        const { error } = await supabase.from("shift_assignments").upsert(rows.slice(i, i + 100), {
-          onConflict: "nurse_id,shift_date",
-          ignoreDuplicates: true,
-        });
+        const { error } = await supabase.from("shift_assignments").insert(rows.slice(i, i + 100));
         if (error) {
           const msg = (error as { message?: string }).message ?? String(error);
           throw new Error(msg);
