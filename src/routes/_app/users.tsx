@@ -2,8 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { createClient } from "@supabase/supabase-js";
 import { useState } from "react";
-import { Users, Search, Plus, Trash2, Shield, UserCog } from "lucide-react";
+import { Users, Search, Plus, Trash2, Shield, UserCog, Loader2, X } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
@@ -40,6 +41,7 @@ function UsersPage() {
   const { isAdmin } = useAuth();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["user-profiles"],
@@ -101,15 +103,24 @@ function UsersPage() {
         title="User Profiles"
         subtitle={`${users.length} user${users.length !== 1 ? "s" : ""} · Manage role assignments`}
         actions={
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="search"
-              placeholder="Search users…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-10 pl-8 pr-3 w-52 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                type="search"
+                placeholder="Search users…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-10 pl-8 pr-3 w-52 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" /> Create User
+            </button>
           </div>
         }
       />
@@ -143,6 +154,182 @@ function UsersPage() {
           </div>
         </div>
       )}
+
+      {showCreate && (
+        <CreateUserModal
+          onClose={() => setShowCreate(false)}
+          onCreated={() => {
+            qc.invalidateQueries({ queryKey: ["user-profiles"] });
+            setShowCreate(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [form, setForm] = useState({
+    fullName: "",
+    email: "",
+    password: "",
+    role: "nurse" as AppRole,
+  });
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (form.password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    setBusy(true);
+    try {
+      // Use a separate client so the admin's own session is not replaced.
+      const tempClient = createClient(
+        import.meta.env.VITE_SUPABASE_URL as string,
+        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+
+      const { data, error: signUpError } = await tempClient.auth.signUp({
+        email: form.email,
+        password: form.password,
+        options: { data: { full_name: form.fullName || form.email } },
+      });
+
+      if (signUpError) {
+        toast.error(signUpError.message);
+        return;
+      }
+
+      const userId = data.user?.id;
+      if (!userId) {
+        toast.error("Account created but no user ID returned — check your email.");
+        return;
+      }
+
+      await Promise.all([
+        supabase.from("user_roles").insert({
+          user_id: userId,
+          role: form.role as import("@/integrations/supabase/types").Database["public"]["Enums"]["app_role"],
+        }),
+        supabase.from("profiles").upsert({
+          id: userId,
+          full_name: form.fullName || form.email,
+          email: form.email,
+          updated_at: new Date().toISOString(),
+        }),
+      ]);
+
+      toast.success(`User created — ${form.email}`);
+      onCreated();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to create user");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const inputCls =
+    "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-lg">Create User</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+            className="h-7 w-7 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium mb-1">Full name</label>
+            <input
+              type="text"
+              placeholder="e.g. Jane Doe"
+              value={form.fullName}
+              onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Email <span className="text-destructive">*</span>
+            </label>
+            <input
+              type="email"
+              required
+              placeholder="user@example.com"
+              value={form.email}
+              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Password <span className="text-destructive">*</span>
+            </label>
+            <input
+              type="password"
+              required
+              minLength={8}
+              placeholder="Min. 8 characters"
+              value={form.password}
+              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Role <span className="text-destructive">*</span>
+            </label>
+            <select
+              required
+              title="Role"
+              value={form.role}
+              onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as AppRole }))}
+              className={inputCls}
+            >
+              {ALL_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABELS[r]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-9 px-4 rounded-md border text-sm hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50"
+            >
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {busy ? "Creating…" : "Create User"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
