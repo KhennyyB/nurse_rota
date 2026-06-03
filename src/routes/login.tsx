@@ -61,10 +61,8 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const navigate = useNavigate();
   const { user, roles, needsRoleSelection, selectRole } = useAuth();
-  const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
   const [busy, setBusy] = useState(false);
   const [roleOptions, setRoleOptions] = useState<AppRole[]>([]);
   const [selectedRole, setSelectedRole] = useState<AppRole | "">("");
@@ -74,7 +72,6 @@ function LoginPage() {
 
   useEffect(() => {
     if (!needsRoleSelection || roles.length <= 1) return;
-    setMode("login");
     setRoleOptions(roles);
     setSelectedRole((current) => (current && roles.includes(current) ? current : roles[0]));
     setSignedInUserId(user?.id ?? null);
@@ -89,41 +86,27 @@ function LoginPage() {
 
     setBusy(true);
     try {
-      if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { full_name: fullName },
-            emailRedirectTo: `${window.location.origin}/`,
-          },
-        });
-        if (error) throw error;
-        toast.success("Account created. You're signed in.");
-        navigate({ to: "/" });
-      } else {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        const userId = data.user?.id;
-        const nextRoles = await getCurrentRoles();
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      const userId = data.user?.id;
+      const nextRoles = await getCurrentRoles();
 
-        if (userId && nextRoles.length > 1) {
-          sessionStorage.removeItem(selectedRoleStorageKey(userId));
-          setSignedInUserId(userId);
-          setRoleOptions(nextRoles);
-          setSelectedRole(nextRoles[0]);
-          toast.success("Select a role to continue");
-          return;
-        }
-
-        if (userId && nextRoles.length === 1) {
-          rememberSelectedRole(userId, nextRoles[0]);
-          selectRole(nextRoles[0]);
-        }
-
-        toast.success("Welcome back");
-        navigate({ to: "/" });
+      if (userId && nextRoles.length > 1) {
+        sessionStorage.removeItem(selectedRoleStorageKey(userId));
+        setSignedInUserId(userId);
+        setRoleOptions(nextRoles);
+        setSelectedRole(nextRoles[0]);
+        toast.success("Select a role to continue");
+        return;
       }
+
+      if (userId && nextRoles.length === 1) {
+        rememberSelectedRole(userId, nextRoles[0]);
+        selectRole(nextRoles[0]);
+      }
+
+      toast.success("Welcome back");
+      navigate({ to: "/" });
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -183,15 +166,11 @@ function LoginPage() {
             <p className="font-bold text-lg">Nurses Rota</p>
           </div>
 
-          <h2 className="text-2xl font-bold">
-            {isChoosingRole ? "Choose your role" : mode === "login" ? "Sign in" : "Create account"}
-          </h2>
+          <h2 className="text-2xl font-bold">{isChoosingRole ? "Choose your role" : "Sign in"}</h2>
           <p className="text-sm text-muted-foreground mt-1">
             {isChoosingRole
               ? "Select the role you want to use for this session."
-              : mode === "login"
-                ? "Enter your credentials to continue."
-                : "New staff start as Nurse — an admin can elevate your role."}
+              : "Enter your credentials to continue."}
           </p>
 
           <form onSubmit={submit} className="space-y-4 mt-6">
@@ -221,21 +200,6 @@ function LoginPage() {
               </div>
             ) : (
               <>
-                {mode === "signup" && (
-                  <div>
-                    <label htmlFor="login-fullname" className="text-sm font-medium">
-                      Full name
-                    </label>
-                    <input
-                      id="login-fullname"
-                      type="text"
-                      required
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-                    />
-                  </div>
-                )}
                 <div>
                   <label htmlFor="login-email" className="text-sm font-medium">
                     Email
@@ -250,39 +214,21 @@ function LoginPage() {
                     className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
-                {mode === "login" ? (
-                  <div>
-                    <label htmlFor="login-password-current" className="text-sm font-medium">
-                      Password
-                    </label>
-                    <input
-                      id="login-password-current"
-                      type="password"
-                      required
-                      minLength={6}
-                      autoComplete="current-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label htmlFor="login-password-new" className="text-sm font-medium">
-                      Password
-                    </label>
-                    <input
-                      id="login-password-new"
-                      type="password"
-                      required
-                      minLength={6}
-                      autoComplete="new-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label htmlFor="login-password" className="text-sm font-medium">
+                    Password
+                  </label>
+                  <input
+                    id="login-password"
+                    type="password"
+                    required
+                    minLength={6}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
               </>
             )}
             <button
@@ -291,22 +237,9 @@ function LoginPage() {
               className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-2"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isChoosingRole ? "Open dashboard" : mode === "login" ? "Sign in" : "Create account"}
+              {isChoosingRole ? "Open dashboard" : "Sign in"}
             </button>
           </form>
-
-          {!isChoosingRole && (
-            <p className="text-sm text-muted-foreground mt-6 text-center">
-              {mode === "login" ? "No account?" : "Already have an account?"}{" "}
-              <button
-                type="button"
-                onClick={() => setMode(mode === "login" ? "signup" : "login")}
-                className="text-primary hover:underline font-medium"
-              >
-                {mode === "login" ? "Create one" : "Sign in"}
-              </button>
-            </p>
-          )}
         </div>
       </div>
     </div>

@@ -46,3 +46,14 @@ export async function adminCreateUser(opts: {
   if (!data.user?.id) throw new Error("User created but no ID returned.");
   return data.user.id;
 }
+
+/**
+ * Permanently delete a user from Supabase Auth and all related rows.
+ * Deleting from auth.users cascades to profiles and user_roles in most
+ * Supabase setups; we also delete them explicitly to be safe.
+ */
+export async function adminDeleteUser(userId: string): Promise<void> {
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.deleteUser(userId);
+  if (error) throw new Error(error.message);
+}

@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { adminCreateUser } from "@/integrations/supabase/admin-client";
+import { adminCreateUser, adminDeleteUser } from "@/integrations/supabase/admin-client";
 import { useState } from "react";
 import { Users, Search, Plus, Trash2, Shield, UserCog, Loader2, X } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
@@ -81,6 +81,22 @@ function UsersPage() {
     qc.invalidateQueries({ queryKey: ["user-profiles"] });
   }
 
+  async function deleteUser(user: UserRow) {
+    if (
+      !confirm(
+        `Permanently delete "${user.full_name ?? user.email}"?\n\nThis removes their login, roles and profile and cannot be undone.`,
+      )
+    )
+      return;
+    try {
+      await adminDeleteUser(user.id);
+      toast.success("User deleted");
+      qc.invalidateQueries({ queryKey: ["user-profiles"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete user");
+    }
+  }
+
   const filtered = search.trim()
     ? users.filter(
         (u) =>
@@ -142,7 +158,13 @@ function UsersPage() {
           ) : (
             <div className="divide-y">
               {filtered.map((u) => (
-                <UserRow key={u.id} user={u} onAdd={addRole} onRemove={removeRole} />
+                <UserRow
+                  key={u.id}
+                  user={u}
+                  onAdd={addRole}
+                  onRemove={removeRole}
+                  onDelete={deleteUser}
+                />
               ))}
             </div>
           )}
@@ -322,10 +344,12 @@ function UserRow({
   user,
   onAdd,
   onRemove,
+  onDelete,
 }: {
   user: UserRow;
   onAdd: (id: string, role: AppRole) => void;
   onRemove: (id: string, role: AppRole) => void;
+  onDelete: (user: UserRow) => void;
 }) {
   const [adding, setAdding] = useState<AppRole | "">("");
   const available = ALL_ROLES.filter((r) => !user.roles.includes(r));
@@ -403,6 +427,16 @@ function UserRow({
           </button>
         </div>
       )}
+
+      {/* Delete user */}
+      <button
+        type="button"
+        onClick={() => onDelete(user)}
+        title="Delete user"
+        className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0 transition-colors"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
