@@ -196,7 +196,7 @@ function inLeave(leave: LeaveInput[], nurseId: string, dateStr: string) {
 }
 
 export function isNAType(role: string) {
-  return /nursing\s*assistant/i.test(role);
+  return /nurs(e|ing)\s*assistant/i.test(role);
 }
 
 export function isInternType(role: string) {
