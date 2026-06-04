@@ -483,10 +483,14 @@ function RotaPage() {
     setGenOpen(false);
     setBusy(true);
     try {
-      // Only pass wards that belong to this facility (or have no facility set).
+      // Pass only the wards relevant to this run so safety-rule violations are
+      // scoped correctly: a ward-specific run (e.g. "IP Ward") should only
+      // report violations for IP Ward, not for every other ward in the facility.
       const facilityWards = wards.filter((w) => {
         const wf = (w as WardInput & { facility?: string | null }).facility;
-        return !wf || wf === genForm.facility;
+        const facilityMatch = !wf || wf === genForm.facility;
+        const wardMatch = !genForm.ward || w.name === genForm.ward;
+        return facilityMatch && wardMatch;
       });
 
       const { assignments: draft, violations } = generateSchedule({

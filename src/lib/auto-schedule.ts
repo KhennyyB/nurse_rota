@@ -543,8 +543,14 @@ export function generateSchedule(opts: {
     scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
     scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
 
-    const wardViolations = enforceMinima(out, wardNurses, ward, days, opts.startDate);
-    allViolations.push(...wardViolations);
+    // Only validate safety rules for wards that have staff in this run.
+    // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
+    // no nurses here), we skip enforcement — it would always report violations
+    // of every minimum since there is literally nobody scheduled.
+    if (wardNurses.length > 0) {
+      const wardViolations = enforceMinima(out, wardNurses, ward, days, opts.startDate);
+      allViolations.push(...wardViolations);
+    }
     wardNurses.forEach((n) => scheduled.add(n.id));
   }
 
