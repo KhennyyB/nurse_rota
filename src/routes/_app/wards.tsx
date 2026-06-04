@@ -196,7 +196,8 @@ function WardsPage() {
               <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
-                  {missingIkoyiWards.length} ward{missingIkoyiWards.length > 1 ? "s" : ""} not yet created
+                  {missingIkoyiWards.length} ward{missingIkoyiWards.length > 1 ? "s" : ""} not yet
+                  created
                 </p>
                 <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
                   {missingIkoyiWards.join(", ")}
@@ -274,7 +275,8 @@ function WardCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const nightOnly = w.min_night_nurses === 0 && w.min_night_supervisor === 0 && w.min_night_na === 0;
+  const nightOnly =
+    w.min_night_nurses === 0 && w.min_night_supervisor === 0 && w.min_night_na === 0;
   return (
     <div className="bg-card border rounded-xl p-5 shadow-soft">
       <div className="flex items-start justify-between gap-2">
@@ -330,13 +332,19 @@ function WardCard({
 
 // ── Add ward modal ────────────────────────────────────────────────────────────
 
-function AddWardModal({ facility: defaultFacility, onClose }: { facility: string; onClose: () => void }) {
+function AddWardModal({
+  facility: defaultFacility,
+  onClose,
+}: {
+  facility: string;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const [selectedFac, setSelectedFac] = useState(defaultFacility || FACILITIES[0]);
   const [form, setForm] = useState({
     name: "",
     min_morning_nurses: 2,
-    min_morning_supervisor: 1,
+    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 2,
     min_night_supervisor: 0,
@@ -373,7 +381,9 @@ function AddWardModal({ facility: defaultFacility, onClose }: { facility: string
             className={inputCls}
           >
             {FACILITIES.map((f) => (
-              <option key={f} value={f}>{f}</option>
+              <option key={f} value={f}>
+                {f}
+              </option>
             ))}
           </select>
         </div>
