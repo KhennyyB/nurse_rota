@@ -190,20 +190,17 @@ function WardsPage() {
             ))}
           </div>
 
-          {/* Ikoyi: sync button — always visible so defaults can be re-applied */}
-          {selectedFacility === "Ikoyi" && canManageStaff && (
+          {/* Ikoyi: seed button — only shown when wards are missing from DB */}
+          {selectedFacility === "Ikoyi" && canManageStaff && missingIkoyiWards.length > 0 && (
             <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
               <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
-                  {missingIkoyiWards.length > 0
-                    ? `${missingIkoyiWards.length} ward${missingIkoyiWards.length > 1 ? "s" : ""} not yet created`
-                    : "Sync ward safety rules from defaults"}
+                  {missingIkoyiWards.length} ward{missingIkoyiWards.length > 1 ? "s" : ""} not yet
+                  created
                 </p>
                 <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
-                  {missingIkoyiWards.length > 0
-                    ? missingIkoyiWards.join(", ")
-                    : "Updates all Ikoyi wards with the latest minimum staffing values."}
+                  {missingIkoyiWards.join(", ")}
                 </p>
               </div>
               <button
