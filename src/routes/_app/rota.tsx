@@ -486,10 +486,19 @@ function RotaPage() {
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
         .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
 
-      // Plain insert — no unique-constraint dependency.
-      // The delete + published-key filter above guarantees no conflicts.
-      for (let i = 0; i < rows.length; i += 100) {
-        const { error } = await supabase.from("shift_assignments").insert(rows.slice(i, i + 100));
+      // Upsert in large batches (500 rows).
+      // Using upsert (onConflict: nurse_id,shift_date) handles any rows that
+      // survived the delete step (e.g. due to RLS) by updating them in place
+      // rather than failing with a duplicate-key violation, which previously
+      // caused partial schedules where only the first 10-11 days had data.
+      // Requires a unique index on (nurse_id, shift_date) — add it once in
+      // Supabase SQL editor:
+      //   CREATE UNIQUE INDEX IF NOT EXISTS shift_assignments_nurse_date_unique
+      //   ON public.shift_assignments (nurse_id, shift_date);
+      for (let i = 0; i < rows.length; i += 500) {
+        const { error } = await supabase
+          .from("shift_assignments")
+          .upsert(rows.slice(i, i + 500), { onConflict: "nurse_id,shift_date" });
         if (error) {
           const msg = (error as { message?: string }).message ?? String(error);
           throw new Error(msg);
@@ -545,8 +554,10 @@ function RotaPage() {
             });
           }
         }
-        for (let i = 0; i < gapRows.length; i += 100) {
-          await supabase.from("shift_assignments").insert(gapRows.slice(i, i + 100));
+        for (let i = 0; i < gapRows.length; i += 500) {
+          await supabase
+            .from("shift_assignments")
+            .upsert(gapRows.slice(i, i + 500), { onConflict: "nurse_id,shift_date" });
         }
       }
 
