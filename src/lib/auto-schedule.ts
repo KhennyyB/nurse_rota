@@ -1,12 +1,10 @@
 // Auto-scheduling engine for the 28-day rota.
 //
-// Nurse/NA cycle (12-day): 3 × Morning → 3 × OFF → 3 × Night → 3 × OFF
+// Nurse/NA cycle (12-day): M→N→M→OFF→OFF→OFF→N→M→N→OFF→OFF→OFF
 // Head Nurse cycle (7-day): M→N→M→N→M→OFF→OFF  (5 on, 2 off, both shifts)
-//   Global coverage nurses — not ward-specific, work weekends too.
-// Ward Supervisor cycle (4-day): 3 × Morning → 1 × OFF
-//   Senior Nurse / Matron / Sister — ward shift leaders, mornings only.
-// Intern Nurses: scheduled globally with NURSE_CYCLE, displayed under
-//   assigned ward but NOT counted toward ward minimum staffing.
+// Ward Supervisor cycle (4-day): M→M→M→OFF  (mornings only, non-Ikoyi)
+// Intern Nurses: NURSE_CYCLE, one per ward, phases staggered so off-days
+//   never fall on the same day across wards.
 
 export type ShiftCode = "M" | "N" | "OFF" | "LEAVE";
 
@@ -49,6 +47,15 @@ export interface DraftAssignment {
   shift: ShiftCode;
 }
 
+export interface SafetyViolation {
+  ward: string;
+  date: string;
+  shift: "M" | "N";
+  role: "nurse" | "supervisor" | "na";
+  required: number;
+  actual: number;
+}
+
 // 12-day block cycle: 3 mixed shifts → 3 off → 3 mixed shifts → 3 off.
 const NURSE_CYCLE: readonly ShiftCode[] = [
   "M",
@@ -82,8 +89,6 @@ type WardMins = Pick<
 >;
 
 // Ikoyi-specific minimum staffing per ward.
-// All wards include min_*_supervisor: 1 (experienced nurse as shift leader per shift).
-// Applied when facility === "Ikoyi", overriding database ward values.
 export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
   "IP Ward": {
     min_morning_nurses: 5,
@@ -198,19 +203,16 @@ export function isInternType(role: string) {
   return /nurse\s*intern|intern\s*nurse/i.test(role);
 }
 
-// Global Head Nurse: not ward-specific, covers all departments.
 export function isGlobalHead(role: string) {
   return /^head\s*nurse$/i.test(role);
 }
 
-// Ward-level supervisor / shift leader: Senior Nurse, Experienced Nurse, Matron, Sister.
 export function isWardSupervisor(role: string) {
   return (
     !isGlobalHead(role) && /supervisor|matron|sister|senior\s*nurse|experienced\s*nurse/i.test(role)
   );
 }
 
-// Kept for callers that still reference the old name.
 export function isHeadOrSupervisor(role: string) {
   return isGlobalHead(role) || isWardSupervisor(role);
 }
@@ -222,9 +224,16 @@ function isNurseOrIntern(role: string) {
 function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode[]): ShiftCode {
   const len = cycle.length;
   const step = Math.max(1, Math.round(len / N));
-  return cycle[(i * step + d) % len];
+  return cycle[(((i * step + d) % len) + len) % len];
 }
 
+/**
+ * Schedule a group of nurses using `cycle`, writing into `out`.
+ *
+ * `phase` shifts each group's starting position in the cycle so that
+ * multiple single-nurse groups (e.g. one intern per ward) don't all land
+ * on the same off-days simultaneously.
+ */
 function scheduleGroup(
   group: NurseInput[],
   cycle: readonly ShiftCode[],
@@ -233,6 +242,7 @@ function scheduleGroup(
   leave: LeaveInput[],
   wardName: string | null,
   out: DraftAssignment[],
+  phase = 0,
 ): void {
   const N = group.length;
   if (N === 0) return;
@@ -248,7 +258,7 @@ function scheduleGroup(
     for (let i = 0; i < N; i++) {
       if (inLeave(leave, group[i].id, dateStr)) {
         out.push({ nurse_id: group[i].id, ward: wardName, shift_date: dateStr, shift: "LEAVE" });
-        leaveVacancies.push(computeShift(i, d, N, cycle));
+        leaveVacancies.push(computeShift(i, d + phase, N, cycle));
         onLeave.add(i);
       }
     }
@@ -259,7 +269,7 @@ function scheduleGroup(
     const rotation: { i: number; shift: ShiftCode }[] = [];
     for (let i = 0; i < N; i++) {
       if (onLeave.has(i)) continue;
-      rotation.push({ i, shift: computeShift(i, d, N, cycle) });
+      rotation.push({ i, shift: computeShift(i, d + phase, N, cycle) });
     }
 
     for (const r of rotation) {
@@ -280,14 +290,27 @@ function scheduleGroup(
   }
 }
 
+/**
+ * Enforce ward minimum staffing for every day in the window.
+ *
+ * Strategy (in priority order):
+ *   1. Promote OFF → target shift (no cost to other shift)
+ *   2. As a last resort, reallocate Night → Morning (or vice versa) when
+ *      one shift is over-staffed and the other is under-staffed.
+ *
+ * Returns the set of violations that STILL exist after enforcement (i.e.
+ * days where even reallocation cannot satisfy the minimum because there
+ * simply aren't enough staff).
+ */
 function enforceMinima(
   out: DraftAssignment[],
   wardNurses: NurseInput[],
   ward: WardInput,
   days: number,
   startDate: Date,
-): void {
+): SafetyViolation[] {
   const nurseById = new Map(wardNurses.map((n) => [n.id, n]));
+  const violations: SafetyViolation[] = [];
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
@@ -296,48 +319,157 @@ function enforceMinima(
 
     const dayAssignments = out.filter((a) => a.shift_date === dateStr && nurseById.has(a.nurse_id));
 
-    const countOnShift = (shift: ShiftCode, roleTest: (r: string) => boolean) =>
+    const count = (shift: ShiftCode, roleTest: (r: string) => boolean) =>
       dayAssignments.filter(
         (a) => a.shift === shift && roleTest(nurseById.get(a.nurse_id)?.role ?? ""),
       ).length;
 
-    const promote = (
+    // Promote OFF → targetShift for matching role, return shortfall remaining.
+    const promoteOff = (
       needed: number,
       current: number,
-      targetShift: ShiftCode,
+      target: ShiftCode,
       roleTest: (r: string) => boolean,
     ) => {
       let deficit = needed - current;
       for (const a of dayAssignments) {
         if (deficit <= 0) break;
         if (a.shift !== "OFF") continue;
-        const role = nurseById.get(a.nurse_id)?.role ?? "";
-        if (roleTest(role)) {
-          a.shift = targetShift;
+        if (roleTest(nurseById.get(a.nurse_id)?.role ?? "")) {
+          a.shift = target;
           deficit--;
         }
       }
+      return Math.max(0, deficit);
     };
 
-    promote(
+    // Reallocate Night → Morning (last resort when morning is short but night is over minimum).
+    const reallocateNightToMorning = (
+      deficit: number,
+      roleTest: (r: string) => boolean,
+      nightMin: number,
+    ) => {
+      const nightCount = count("N", roleTest);
+      const surplus = nightCount - nightMin; // how many night nurses we can afford to move
+      const movable = Math.min(deficit, Math.max(0, surplus));
+      let moved = 0;
+      for (const a of dayAssignments) {
+        if (moved >= movable) break;
+        if (a.shift !== "N") continue;
+        if (roleTest(nurseById.get(a.nurse_id)?.role ?? "")) {
+          a.shift = "M";
+          moved++;
+        }
+      }
+      return deficit - moved;
+    };
+
+    // --- Morning enforcement ---
+    let supShortfall = promoteOff(
       ward.min_morning_supervisor,
-      countOnShift("M", isWardSupervisor),
+      count("M", isWardSupervisor),
       "M",
       isWardSupervisor,
     );
-    promote(ward.min_morning_nurses, countOnShift("M", isNurseOrIntern), "M", isNurseOrIntern);
-    promote(ward.min_morning_na, countOnShift("M", isNAType), "M", isNAType);
+    if (supShortfall > 0)
+      supShortfall = reallocateNightToMorning(
+        supShortfall,
+        isWardSupervisor,
+        ward.min_night_supervisor,
+      );
+    if (supShortfall > 0)
+      violations.push({
+        ward: ward.name,
+        date: dateStr,
+        shift: "M",
+        role: "supervisor",
+        required: ward.min_morning_supervisor,
+        actual: ward.min_morning_supervisor - supShortfall,
+      });
 
-    promote(ward.min_night_supervisor, countOnShift("N", isWardSupervisor), "N", isWardSupervisor);
-    promote(ward.min_night_nurses, countOnShift("N", isNurseOrIntern), "N", isNurseOrIntern);
-    promote(ward.min_night_na, countOnShift("N", isNAType), "N", isNAType);
+    let nurseShortfall = promoteOff(
+      ward.min_morning_nurses,
+      count("M", isNurseOrIntern),
+      "M",
+      isNurseOrIntern,
+    );
+    if (nurseShortfall > 0)
+      nurseShortfall = reallocateNightToMorning(
+        nurseShortfall,
+        isNurseOrIntern,
+        ward.min_night_nurses,
+      );
+    if (nurseShortfall > 0)
+      violations.push({
+        ward: ward.name,
+        date: dateStr,
+        shift: "M",
+        role: "nurse",
+        required: ward.min_morning_nurses,
+        actual: ward.min_morning_nurses - nurseShortfall,
+      });
+
+    let naShortfall = promoteOff(ward.min_morning_na, count("M", isNAType), "M", isNAType);
+    if (naShortfall > 0)
+      naShortfall = reallocateNightToMorning(naShortfall, isNAType, ward.min_night_na);
+    if (naShortfall > 0)
+      violations.push({
+        ward: ward.name,
+        date: dateStr,
+        shift: "M",
+        role: "na",
+        required: ward.min_morning_na,
+        actual: ward.min_morning_na - naShortfall,
+      });
+
+    // --- Night enforcement ---
+    const nSupShortfall = promoteOff(
+      ward.min_night_supervisor,
+      count("N", isWardSupervisor),
+      "N",
+      isWardSupervisor,
+    );
+    if (nSupShortfall > 0)
+      violations.push({
+        ward: ward.name,
+        date: dateStr,
+        shift: "N",
+        role: "supervisor",
+        required: ward.min_night_supervisor,
+        actual: ward.min_night_supervisor - nSupShortfall,
+      });
+
+    const nNurseShortfall = promoteOff(
+      ward.min_night_nurses,
+      count("N", isNurseOrIntern),
+      "N",
+      isNurseOrIntern,
+    );
+    if (nNurseShortfall > 0)
+      violations.push({
+        ward: ward.name,
+        date: dateStr,
+        shift: "N",
+        role: "nurse",
+        required: ward.min_night_nurses,
+        actual: ward.min_night_nurses - nNurseShortfall,
+      });
+
+    const nNaShortfall = promoteOff(ward.min_night_na, count("N", isNAType), "N", isNAType);
+    if (nNaShortfall > 0)
+      violations.push({
+        ward: ward.name,
+        date: dateStr,
+        shift: "N",
+        role: "na",
+        required: ward.min_night_na,
+        actual: ward.min_night_na - nNaShortfall,
+      });
   }
+
+  return violations;
 }
 
-/**
- * Given a list of ward names and an intern's current ward, return the next ward
- * in round-robin rotation. Called by rota.tsx when rotateInterns is enabled.
- */
 export function nextInternWard(currentWard: string | null, wardNames: string[]): string | null {
   if (!wardNames.length) return currentWard;
   if (!currentWard) return wardNames[0];
@@ -345,14 +477,14 @@ export function nextInternWard(currentWard: string | null, wardNames: string[]):
   return wardNames[(idx + 1) % wardNames.length];
 }
 
+export interface ScheduleResult {
+  assignments: DraftAssignment[];
+  violations: SafetyViolation[];
+}
+
 /**
- * Generate a 28-day draft schedule.
- *
- * - Head Nurses: global, no ward, HEAD_NURSE_CYCLE (5 on/2 off, M+N).
- * - Intern Nurses: global, NURSE_CYCLE, ward shown for display only (not in ward minimums).
- * - Ward Supervisors (Senior/Experienced Nurse, Matron, Sister): SUPERVISOR_CYCLE, mornings.
- * - Regular Nurses + NAs: NURSE_CYCLE, ward-specific.
- * - Ikoyi facility: IKOYI_WARD_MINIMUMS override DB ward values.
+ * Generate a 28-day draft schedule and return both the assignments and any
+ * safety-rule violations that could not be resolved given the available staff.
  */
 export function generateSchedule(opts: {
   nurses: NurseInput[];
@@ -361,19 +493,21 @@ export function generateSchedule(opts: {
   startDate: Date;
   days?: number;
   facility?: string;
-}): DraftAssignment[] {
+}): ScheduleResult {
   const { nurses, wards, leave } = opts;
   const days = opts.days ?? 28;
   const facility = opts.facility ?? "";
   const out: DraftAssignment[] = [];
   const scheduled = new Set<string>();
+  const allViolations: SafetyViolation[] = [];
 
-  // 1. Global Head Nurses — ward = null (general coverage across all departments)
+  // 1. Global Head Nurses
   const headNurses = nurses.filter((n) => isGlobalHead(n.role));
   scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out);
   headNurses.forEach((n) => scheduled.add(n.id));
 
-  // 2. Intern Nurses — grouped by assigned ward for display; NOT in ward minimums
+  // 2. Intern Nurses — one per ward, phases spread evenly across the cycle so
+  //    no two wards share the same off-days.
   const interns = nurses.filter((n) => isInternType(n.role));
   const internsByWard = new Map<string | null, NurseInput[]>();
   for (const intern of interns) {
@@ -382,21 +516,21 @@ export function generateSchedule(opts: {
     group.push(intern);
     internsByWard.set(ward, group);
   }
-  for (const [ward, group] of internsByWard) {
-    scheduleGroup(group, NURSE_CYCLE, days, opts.startDate, leave, ward, out);
+  const internGroupList = [...internsByWard.entries()];
+  const numInternGroups = internGroupList.length;
+  for (let gi = 0; gi < numInternGroups; gi++) {
+    const [ward, group] = internGroupList[gi];
+    // Distribute phases so interns in different wards start at different cycle
+    // positions — prevents all interns being off on the same days.
+    const phase = numInternGroups > 1 ? Math.round((gi * NURSE_CYCLE.length) / numInternGroups) : 0;
+    scheduleGroup(group, NURSE_CYCLE, days, opts.startDate, leave, ward, out, phase);
     group.forEach((n) => scheduled.add(n.id));
   }
 
-  // 3. Per-ward scheduling (supervisors, regulars, NAs)
-  // For Ikoyi: Senior Nurses use NURSE_CYCLE (both M + N) so they lead every shift.
-  // For all other facilities: Senior Nurses use SUPERVISOR_CYCLE (mornings only).
+  // 3. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
   const supervisorCycle = facility === "Ikoyi" ? NURSE_CYCLE : SUPERVISOR_CYCLE;
 
   for (const ward of wards) {
-    // Always use DB ward values — the Ikoyi wards are seeded into the DB from
-    // IKOYI_WARD_MINIMUMS and are editable there. No hardcoded override is applied.
-    const effectiveWard: WardInput = ward;
-
     const wardNurses = nurses.filter(
       (n) => parseWards(n.ward)[0] === ward.name && !isGlobalHead(n.role) && !isInternType(n.role),
     );
@@ -409,7 +543,8 @@ export function generateSchedule(opts: {
     scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
     scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
 
-    enforceMinima(out, wardNurses, effectiveWard, days, opts.startDate);
+    const wardViolations = enforceMinima(out, wardNurses, ward, days, opts.startDate);
+    allViolations.push(...wardViolations);
     wardNurses.forEach((n) => scheduled.add(n.id));
   }
 
@@ -429,5 +564,5 @@ export function generateSchedule(opts: {
     }
   }
 
-  return out;
+  return { assignments: out, violations: allViolations };
 }

@@ -28,6 +28,7 @@ import {
   type NurseInput,
   type WardInput,
   type LeaveInput,
+  type SafetyViolation,
 } from "@/lib/auto-schedule";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,30 @@ type GenForm = {
   ward: string;
   rotateInterns: boolean;
 };
+
+// Collapse per-day violations into a per-ward/shift/role worst-case summary.
+function summariseViolations(violations: SafetyViolation[]) {
+  const map = new Map<
+    string,
+    { ward: string; shift: "M" | "N"; role: string; required: number; actual: number }
+  >();
+  for (const v of violations) {
+    const key = `${v.ward}|${v.shift}|${v.role}`;
+    const existing = map.get(key);
+    if (!existing || v.actual < existing.actual) {
+      map.set(key, {
+        ward: v.ward,
+        shift: v.shift,
+        role: v.role,
+        required: v.required,
+        actual: v.actual,
+      });
+    }
+  }
+  return [...map.values()].sort(
+    (a, b) => a.ward.localeCompare(b.ward) || a.shift.localeCompare(b.shift),
+  );
+}
 
 function RotaPage() {
   const { canManageStaff, hasAnyRole, user, nurseFacility, isAdmin } = useAuth();
@@ -464,7 +489,7 @@ function RotaPage() {
         return !wf || wf === genForm.facility;
       });
 
-      const draft = generateSchedule({
+      const { assignments: draft, violations } = generateSchedule({
         nurses: schedulingNurses,
         wards: facilityWards,
         leave,
@@ -472,6 +497,22 @@ function RotaPage() {
         days: DAYS,
         facility: genForm.facility,
       });
+
+      // Safety-rule gate: if the ward's minimums cannot be met with the
+      // current staff, block generation and tell the user what's short.
+      if (violations.length > 0) {
+        // Summarise by ward + role + shift (don't list every single day)
+        const summary = summariseViolations(violations);
+        const lines = summary.map(
+          (v) =>
+            `• ${v.ward} — ${v.shift === "M" ? "Morning" : "Night"} ${v.role}: need ${v.required}, only ${v.actual} available`,
+        );
+        toast.error(
+          `Cannot generate — safety rules not met:\n${lines.join("\n")}\n\nAdd more staff to meet the ward minimums, then regenerate.`,
+          { duration: 10000 },
+        );
+        return;
+      }
 
       // Scope the delete to only the nurses being regenerated in this run.
       // Head nurse and intern assignments from a prior ward run are preserved.
