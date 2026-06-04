@@ -222,16 +222,36 @@ function RotaPage() {
         []) as LeaveInput[],
   });
 
+  // Fetch assignments filtered to only the loaded nurses and date range.
+  // Querying without a nurse filter hits PostgREST's 1000-row default limit when
+  // a facility has many nurses — later days silently disappear from the grid.
+  // Batching by 30 IDs keeps each response well under 1000 rows (30 × 28 = 840).
+  const nurseIds = useMemo(() => nurses.map((n) => n.id), [nurses]);
   const { data: assignments = [], isLoading } = useQuery({
-    queryKey: ["assignments", ymd(startDate), ymd(endDate)],
+    queryKey: ["assignments", ymd(startDate), ymd(endDate), nurseIds.length],
+    enabled: nurseIds.length > 0,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("shift_assignments")
-        .select("*")
-        .gte("shift_date", ymd(startDate))
-        .lte("shift_date", ymd(endDate));
-      if (error) throw error;
-      return (data ?? []) as Assignment[];
+      const BATCH = 30;
+      const batches: string[][] = [];
+      for (let i = 0; i < nurseIds.length; i += BATCH) {
+        batches.push(nurseIds.slice(i, i + BATCH));
+      }
+      const results = await Promise.all(
+        batches.map((batch) =>
+          supabase
+            .from("shift_assignments")
+            .select("*")
+            .gte("shift_date", ymd(startDate))
+            .lte("shift_date", ymd(endDate))
+            .in("nurse_id", batch),
+        ),
+      );
+      const all: Assignment[] = [];
+      for (const { data, error } of results) {
+        if (error) throw error;
+        all.push(...((data ?? []) as Assignment[]));
+      }
+      return all;
     },
   });
 
