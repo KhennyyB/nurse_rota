@@ -10,6 +10,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
+  Lock,
   PlayCircle,
   StopCircle,
   Timer,
@@ -45,6 +46,7 @@ type Assignment = {
   shift: "M" | "N" | "OFF" | "LEAVE";
   shift_date: string;
   ward: string | null;
+  status: string;
 };
 
 type PeriodHours = {
@@ -104,10 +106,8 @@ function fmtHHMM(d: Date) {
 function ShiftPage() {
   const { nurseId, fullName, activeRole } = useAuth();
 
-  // Management roles see all nurses' shift hours; regular nurses see personal tracker.
-  if (activeRole && activeRole !== "nurse") {
-    return <AllNursesShiftView />;
-  }
+  // All hooks must be called unconditionally (Rules of Hooks).
+  // The management-role early return is placed after every hook call below.
   const qc = useQueryClient();
   const today = todayYmd();
   const [now, setNow] = useState(new Date());
@@ -133,7 +133,7 @@ function ShiftPage() {
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_assignments")
-        .select("id, shift, shift_date, ward")
+        .select("id, shift, shift_date, ward, status")
         .eq("nurse_id", nurseId!)
         .eq("shift_date", today)
         .maybeSingle();
@@ -207,10 +207,7 @@ function ShiftPage() {
     },
   });
 
-  const currentPeriodHours = currentPeriodLogs.reduce(
-    (s, l) => s + (l.hours_logged ?? 0),
-    0,
-  );
+  const currentPeriodHours = currentPeriodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
 
   // ── Auto-end active shift at expected_end_at ─────────────────────────────
   useEffect(() => {
@@ -233,6 +230,11 @@ function ShiftPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shiftLog?.id]);
+
+  // Management roles see all nurses' shift hours; regular nurses see personal tracker.
+  if (activeRole && activeRole !== "nurse") {
+    return <AllNursesShiftView />;
+  }
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -295,7 +297,8 @@ function ShiftPage() {
     if (error) return toast.error(error.message);
 
     // Accumulate hours into nurses.hours_this_month
-    if (nurseId) await supabase.rpc("increment_nurse_hours", { p_nurse_id: nurseId, p_hours: hours });
+    if (nurseId)
+      await supabase.rpc("increment_nurse_hours", { p_nurse_id: nurseId, p_hours: hours });
 
     if (!isAuto) toast.success(`Shift ended — ${fmtHours(hours)} logged`);
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
@@ -325,6 +328,7 @@ function ShiftPage() {
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
+  const isSchedulePublished = assignment?.status === "published";
   const hasShiftToday = assignment && (assignment.shift === "M" || assignment.shift === "N");
   const isActive = shiftLog && !shiftLog.ended_at;
   const isEnded = shiftLog && !!shiftLog.ended_at;
@@ -346,7 +350,12 @@ function ShiftPage() {
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
             <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
-              Today · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+              Today ·{" "}
+              {new Date().toLocaleDateString("en-GB", {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+              })}
             </p>
             {hasShiftToday ? (
               <p className="text-2xl font-bold mt-1">
@@ -357,7 +366,11 @@ function ShiftPage() {
               </p>
             ) : (
               <p className="text-2xl font-bold mt-1 text-muted-foreground">
-                {assignment ? (assignment.shift === "LEAVE" ? "On Leave" : "Day Off") : "No assignment"}
+                {assignment
+                  ? assignment.shift === "LEAVE"
+                    ? "On Leave"
+                    : "Day Off"
+                  : "No assignment"}
               </p>
             )}
             {assignment?.ward && (
@@ -475,9 +488,7 @@ function ShiftPage() {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() =>
-                      void startShift(lateDialog.reason, lateDialog.capturedMinutes)
-                    }
+                    onClick={() => void startShift(lateDialog.reason, lateDialog.capturedMinutes)}
                     disabled={!lateDialog.reason.trim()}
                     className="flex-1 h-9 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
@@ -494,11 +505,21 @@ function ShiftPage() {
               </div>
             )}
 
+            {/* Unpublished schedule warning */}
+            {!shiftLog && !isSchedulePublished && (
+              <div className="flex items-start gap-2 rounded-lg border border-muted bg-muted/40 px-3 py-2.5 text-sm">
+                <Lock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <p className="text-muted-foreground">
+                  The rota schedule has not been published yet.
+                </p>
+              </div>
+            )}
+
             <div className="flex gap-3">
               {!shiftLog && !lateDialog.open && (
                 <button
                   type="button"
-                  disabled={!canStartShift}
+                  disabled={!canStartShift || !isSchedulePublished}
                   onClick={() => {
                     if (isLate) {
                       setLateDialog({
@@ -512,17 +533,19 @@ function ShiftPage() {
                   }}
                   className={cn(
                     "flex-1 h-11 rounded-lg text-sm font-semibold inline-flex items-center justify-center gap-2 transition",
-                    canStartShift
+                    canStartShift && isSchedulePublished
                       ? "bg-emerald-600 text-white hover:bg-emerald-700"
                       : "bg-muted text-muted-foreground cursor-not-allowed",
                   )}
                 >
                   <PlayCircle className="h-5 w-5" />
-                  {canStartShift
-                    ? "Start Shift"
-                    : shiftStartTime
-                      ? `Shift begins at ${fmtHHMM(shiftStartTime)}`
-                      : "Start Shift"}
+                  {!isSchedulePublished
+                    ? "Schedule Not Published"
+                    : canStartShift
+                      ? "Start Shift"
+                      : shiftStartTime
+                        ? `Shift begins at ${fmtHHMM(shiftStartTime)}`
+                        : "Start Shift"}
                 </button>
               )}
               {isActive && (
@@ -536,8 +559,8 @@ function ShiftPage() {
               )}
             </div>
 
-            {/* Help text when button is locked */}
-            {!shiftLog && !canStartShift && shiftStartTime && (
+            {/* Help text when button is time-locked */}
+            {!shiftLog && isSchedulePublished && !canStartShift && shiftStartTime && (
               <p className="text-xs text-center text-muted-foreground">
                 The button unlocks at {fmtHHMM(shiftStartTime)} when your shift begins.
               </p>
@@ -573,7 +596,8 @@ function ShiftPage() {
             <>
               <p className="text-3xl font-bold">{fmtHours(Number(periodHours.total_hours))}</p>
               <p className="text-xs text-muted-foreground mt-1">
-                {periodHours.total_shifts} shifts · {periodHours.period_start} → {periodHours.period_end}
+                {periodHours.total_shifts} shifts · {periodHours.period_start} →{" "}
+                {periodHours.period_end}
               </p>
             </>
           ) : (
@@ -613,7 +637,8 @@ function ShiftPage() {
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {fmtTime(log.started_at)} → {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
+                      {fmtTime(log.started_at)} →{" "}
+                      {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
                     </p>
                     {log.is_late && log.late_reason && (
                       <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
@@ -640,7 +665,14 @@ function ShiftPage() {
 
 // ── All-nurses shift hours view (admin / management roles) ────────────────────
 
-type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null; target_hours: number };
+type NurseRow = {
+  id: string;
+  name: string;
+  role: string;
+  ward: string | null;
+  facility: string | null;
+  target_hours: number;
+};
 type AllShiftLog = {
   nurse_id: string;
   hours_logged: number | null;
@@ -661,7 +693,13 @@ function AllNursesShiftView() {
 
   const { data: nurses = [] } = useQuery<NurseRow[]>({
     queryKey: ["nurses"],
-    queryFn: async () => ((await supabase.from("nurses").select("id,name,role,ward,facility,target_hours").order("name")).data ?? []) as NurseRow[],
+    queryFn: async () =>
+      ((
+        await supabase
+          .from("nurses")
+          .select("id,name,role,ward,facility,target_hours")
+          .order("name")
+      ).data ?? []) as NurseRow[],
   });
 
   const { data: logs = [] } = useQuery<AllShiftLog[]>({
@@ -669,7 +707,9 @@ function AllNursesShiftView() {
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_logs")
-        .select("nurse_id,hours_logged,shift_date,shift_type,started_at,ended_at,is_late,late_minutes")
+        .select(
+          "nurse_id,hours_logged,shift_date,shift_type,started_at,ended_at,is_late,late_minutes",
+        )
         .gte("shift_date", lbStr)
         .order("shift_date", { ascending: false });
       return (data ?? []) as AllShiftLog[];
@@ -696,7 +736,11 @@ function AllNursesShiftView() {
   const filtered = nurses.filter((n) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
-    return n.name.toLowerCase().includes(q) || (n.ward ?? "").toLowerCase().includes(q) || (n.facility ?? "").toLowerCase().includes(q);
+    return (
+      n.name.toLowerCase().includes(q) ||
+      (n.ward ?? "").toLowerCase().includes(q) ||
+      (n.facility ?? "").toLowerCase().includes(q)
+    );
   });
 
   const totalHours = [...hoursMap.values()].reduce((s, h) => s + h, 0);
@@ -704,10 +748,7 @@ function AllNursesShiftView() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Shift Hours"
-        subtitle="All staff · current 28-day period"
-      />
+      <PageHeader title="Shift Hours" subtitle="All staff · current 28-day period" />
 
       {/* Summary stats */}
       <div className="grid grid-cols-3 gap-4">
@@ -777,12 +818,16 @@ function AllNursesShiftView() {
                     <p className="font-medium">{n.name}</p>
                     <p className="text-xs text-muted-foreground">{n.role}</p>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{n.ward?.split("|")[0] ?? "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {n.ward?.split("|")[0] ?? "—"}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{n.facility ?? "—"}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{shifts}</td>
                   <td className="px-4 py-3 text-right tabular-nums font-semibold">
                     {fmtHours(hrs)}
-                    <span className="text-xs font-normal text-muted-foreground ml-1">/ {target}h</span>
+                    <span className="text-xs font-normal text-muted-foreground ml-1">
+                      / {target}h
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     <div className="h-2 rounded-full bg-muted overflow-hidden w-32">
