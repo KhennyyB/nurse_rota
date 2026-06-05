@@ -223,8 +223,9 @@ function isNurseOrIntern(role: string) {
 
 function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode[]): ShiftCode {
   const len = cycle.length;
-  const step = Math.max(1, Math.round(len / N));
-  return cycle[(((i * step + d) % len) + len) % len];
+  // Evenly-distributed offsets: avoids duplicate cycle positions when N > len/2.
+  const offset = Math.round((i * len) / N) % len;
+  return cycle[(((d + offset) % len) + len) % len];
 }
 
 /**
@@ -246,6 +247,11 @@ function scheduleGroup(
 ): void {
   const N = group.length;
   if (N === 0) return;
+
+  // Cumulative M/N counts per nurse position — used to distribute leave-cover
+  // shifts fairly instead of always burdening the first nurse in the array.
+  const mCount = new Array<number>(N).fill(0);
+  const nCount = new Array<number>(N).fill(0);
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
@@ -272,19 +278,33 @@ function scheduleGroup(
       rotation.push({ i, shift: computeShift(i, d + phase, N, cycle) });
     }
 
-    for (const r of rotation) {
-      if (r.shift !== "OFF") continue;
-      if (mVac > 0) {
+    // Cover M vacancies: pick OFF nurses with fewest accumulated M shifts first.
+    if (mVac > 0) {
+      const offNurses = rotation
+        .filter((r) => r.shift === "OFF")
+        .sort((a, b) => mCount[a.i] - mCount[b.i]);
+      for (const r of offNurses) {
+        if (mVac <= 0) break;
         r.shift = "M";
         mVac--;
-      } else if (nVac > 0 && !isHeadOrSupervisor(group[r.i].role)) {
+      }
+    }
+
+    // Cover N vacancies: pick OFF nurses (excl. heads/supervisors) with fewest N shifts first.
+    if (nVac > 0) {
+      const offNurses = rotation
+        .filter((r) => r.shift === "OFF" && !isHeadOrSupervisor(group[r.i].role))
+        .sort((a, b) => nCount[a.i] - nCount[b.i]);
+      for (const r of offNurses) {
+        if (nVac <= 0) break;
         r.shift = "N";
         nVac--;
       }
-      if (!mVac && !nVac) break;
     }
 
     for (const r of rotation) {
+      if (r.shift === "M") mCount[r.i]++;
+      else if (r.shift === "N") nCount[r.i]++;
       out.push({ nurse_id: group[r.i].id, ward: wardName, shift_date: dateStr, shift: r.shift });
     }
   }
@@ -312,6 +332,11 @@ function enforceMinima(
   const nurseById = new Map(wardNurses.map((n) => [n.id, n]));
   const violations: SafetyViolation[] = [];
 
+  // Cumulative M/N counts per nurse — updated at the end of each day so
+  // promotion decisions always favour nurses with the fewest prior shifts.
+  const mCum = new Map<string, number>(wardNurses.map((n) => [n.id, 0]));
+  const nCum = new Map<string, number>(wardNurses.map((n) => [n.id, 0]));
+
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + d);
@@ -324,7 +349,7 @@ function enforceMinima(
         (a) => a.shift === shift && roleTest(nurseById.get(a.nurse_id)?.role ?? ""),
       ).length;
 
-    // Promote OFF → targetShift for matching role, return shortfall remaining.
+    // Promote OFF → targetShift, preferring nurses with fewest accumulated target-shifts.
     const promoteOff = (
       needed: number,
       current: number,
@@ -332,34 +357,37 @@ function enforceMinima(
       roleTest: (r: string) => boolean,
     ) => {
       let deficit = needed - current;
-      for (const a of dayAssignments) {
+      if (deficit <= 0) return 0;
+      const cum = target === "M" ? mCum : nCum;
+      const candidates = dayAssignments
+        .filter((a) => a.shift === "OFF" && roleTest(nurseById.get(a.nurse_id)?.role ?? ""))
+        .sort((a, b) => (cum.get(a.nurse_id) ?? 0) - (cum.get(b.nurse_id) ?? 0));
+      for (const a of candidates) {
         if (deficit <= 0) break;
-        if (a.shift !== "OFF") continue;
-        if (roleTest(nurseById.get(a.nurse_id)?.role ?? "")) {
-          a.shift = target;
-          deficit--;
-        }
+        a.shift = target;
+        deficit--;
       }
       return Math.max(0, deficit);
     };
 
-    // Reallocate Night → Morning (last resort when morning is short but night is over minimum).
+    // Reallocate Night → Morning (last resort): prefer nurses with fewest M shifts.
     const reallocateNightToMorning = (
       deficit: number,
       roleTest: (r: string) => boolean,
       nightMin: number,
     ) => {
       const nightCount = count("N", roleTest);
-      const surplus = nightCount - nightMin; // how many night nurses we can afford to move
+      const surplus = nightCount - nightMin;
       const movable = Math.min(deficit, Math.max(0, surplus));
+      if (movable <= 0) return deficit;
+      const candidates = dayAssignments
+        .filter((a) => a.shift === "N" && roleTest(nurseById.get(a.nurse_id)?.role ?? ""))
+        .sort((a, b) => (mCum.get(a.nurse_id) ?? 0) - (mCum.get(b.nurse_id) ?? 0));
       let moved = 0;
-      for (const a of dayAssignments) {
+      for (const a of candidates) {
         if (moved >= movable) break;
-        if (a.shift !== "N") continue;
-        if (roleTest(nurseById.get(a.nurse_id)?.role ?? "")) {
-          a.shift = "M";
-          moved++;
-        }
+        a.shift = "M";
+        moved++;
       }
       return deficit - moved;
     };
@@ -465,6 +493,13 @@ function enforceMinima(
         required: ward.min_night_na,
         actual: ward.min_night_na - nNaShortfall,
       });
+
+    // Update cumulative counts from today's finalized assignments so tomorrow's
+    // promotion decisions use accurate history.
+    for (const a of dayAssignments) {
+      if (a.shift === "M") mCum.set(a.nurse_id, (mCum.get(a.nurse_id) ?? 0) + 1);
+      else if (a.shift === "N") nCum.set(a.nurse_id, (nCum.get(a.nurse_id) ?? 0) + 1);
+    }
   }
 
   return violations;
