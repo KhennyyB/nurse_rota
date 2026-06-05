@@ -192,11 +192,15 @@ function ApprovalsPage() {
         return `${d.getFullYear()}-${m}-${day}`;
       };
 
+      // PostgREST default cap is 1000 rows — override so large facilities
+      // (200 nurses × ~6 periods × 28 days = ~33 600 rows) don't get silently
+      // truncated and produce missing windows.
       const { data, error } = await supabase
         .from("shift_assignments")
         .select("id, shift_date, status, nurse_id")
         .gte("shift_date", ymd(sixAgo))
-        .lte("shift_date", ymd(threeAhead));
+        .lte("shift_date", ymd(threeAhead))
+        .limit(50000);
       if (error) throw error;
       return (data ?? []) as PendingRow[];
     },
@@ -303,12 +307,15 @@ function ApprovalsPage() {
   // scope = "" → all staff  |  "__HEAD__" → head nurses only  |  ward name → that ward + its interns
   async function fetchWindowData(win: RotaWindow, scope = "") {
     const endDate = scheduleEndDate(win.startDate);
+    // Use a high explicit limit to override PostgREST's 1000-row default.
+    // 10 000 covers up to 357 nurses × 28 days in a single period.
     const { data: assignData } = await supabase
       .from("shift_assignments")
       .select("nurse_id, shift_date, shift")
       .gte("shift_date", win.startDate)
       .lte("shift_date", endDate)
-      .eq("status", "published");
+      .eq("status", "published")
+      .limit(10000);
 
     const assignments = (assignData ?? []) as { nurse_id: string; shift_date: string; shift: string }[];
     const assignMap = new Map<string, string>();
