@@ -493,6 +493,26 @@ function RotaPage() {
         return facilityMatch && wardMatch;
       });
 
+      // Find the earliest ever-scheduled day for this facility so the cycle
+      // phases continue seamlessly across 28-day periods.
+      let periodOffset = 0;
+      const facilityIds = facilityNurses.map((n) => n.id);
+      if (facilityIds.length > 0) {
+        const { data: epochRow } = await supabase
+          .from("shift_assignments")
+          .select("shift_date")
+          .in("nurse_id", facilityIds.slice(0, 200))
+          .lt("shift_date", ymd(genStart))
+          .order("shift_date", { ascending: true })
+          .limit(1);
+        if (epochRow?.[0]?.shift_date) {
+          const epochDate = new Date(epochRow[0].shift_date + "T00:00:00");
+          periodOffset = Math.round(
+            (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
+          );
+        }
+      }
+
       const { assignments: draft, violations } = generateSchedule({
         nurses: schedulingNurses,
         wards: facilityWards,
@@ -500,6 +520,7 @@ function RotaPage() {
         startDate: genStart,
         days: DAYS,
         facility: genForm.facility,
+        periodOffset,
       });
 
       // Safety-rule gate: if the ward's minimums cannot be met with the

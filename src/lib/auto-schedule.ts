@@ -528,17 +528,20 @@ export function generateSchedule(opts: {
   startDate: Date;
   days?: number;
   facility?: string;
+  /** Days elapsed since the facility's very first scheduled day (period 0 = 0). */
+  periodOffset?: number;
 }): ScheduleResult {
   const { nurses, wards, leave } = opts;
   const days = opts.days ?? 28;
   const facility = opts.facility ?? "";
+  const periodOffset = opts.periodOffset ?? 0;
   const out: DraftAssignment[] = [];
   const scheduled = new Set<string>();
   const allViolations: SafetyViolation[] = [];
 
   // 1. Global Head Nurses
   const headNurses = nurses.filter((n) => isGlobalHead(n.role));
-  scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out);
+  scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out, periodOffset);
   headNurses.forEach((n) => scheduled.add(n.id));
 
   // 2. Intern Nurses — one per ward, phases spread evenly across the cycle so
@@ -555,10 +558,20 @@ export function generateSchedule(opts: {
   const numInternGroups = internGroupList.length;
   for (let gi = 0; gi < numInternGroups; gi++) {
     const [ward, group] = internGroupList[gi];
-    // Distribute phases so interns in different wards start at different cycle
-    // positions — prevents all interns being off on the same days.
-    const phase = numInternGroups > 1 ? Math.round((gi * NURSE_CYCLE.length) / numInternGroups) : 0;
-    scheduleGroup(group, NURSE_CYCLE, days, opts.startDate, leave, ward, out, phase);
+    // Distribute stagger phases so interns in different wards start at different
+    // cycle positions; add periodOffset so the cycle continues across periods.
+    const stagger =
+      numInternGroups > 1 ? Math.round((gi * NURSE_CYCLE.length) / numInternGroups) : 0;
+    scheduleGroup(
+      group,
+      NURSE_CYCLE,
+      days,
+      opts.startDate,
+      leave,
+      ward,
+      out,
+      periodOffset + stagger,
+    );
     group.forEach((n) => scheduled.add(n.id));
   }
 
@@ -574,9 +587,18 @@ export function generateSchedule(opts: {
     const regulars = wardNurses.filter((n) => !isNAType(n.role) && !isWardSupervisor(n.role));
     const nas = wardNurses.filter((n) => isNAType(n.role));
 
-    scheduleGroup(supervisors, supervisorCycle, days, opts.startDate, leave, ward.name, out);
-    scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
-    scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out);
+    scheduleGroup(
+      supervisors,
+      supervisorCycle,
+      days,
+      opts.startDate,
+      leave,
+      ward.name,
+      out,
+      periodOffset,
+    );
+    scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
+    scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
 
     // Only validate safety rules for wards that have staff in this run.
     // If wardNurses is empty (e.g. generating only for IP Ward, so ER has

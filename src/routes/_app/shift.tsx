@@ -5,7 +5,16 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
-import { Clock, PlayCircle, StopCircle, CheckCircle2, CalendarDays, Timer, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarDays,
+  CheckCircle2,
+  Clock,
+  PlayCircle,
+  StopCircle,
+  Timer,
+  Users,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 
@@ -26,6 +35,9 @@ type ShiftLog = {
   expected_end_at: string;
   hours_logged: number | null;
   period_start: string;
+  is_late: boolean;
+  late_minutes: number | null;
+  late_reason: string | null;
 };
 
 type Assignment = {
@@ -85,6 +97,10 @@ function hoursLogged(startedAt: string, endedAt: string) {
   return Math.round((ms / 3600000) * 100) / 100;
 }
 
+function fmtHHMM(d: Date) {
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
 function ShiftPage() {
   const { nurseId, fullName, activeRole } = useAuth();
 
@@ -96,6 +112,11 @@ function ShiftPage() {
   const today = todayYmd();
   const [now, setNow] = useState(new Date());
   const autoEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [lateDialog, setLateDialog] = useState<{
+    open: boolean;
+    reason: string;
+    capturedMinutes: number;
+  }>({ open: false, reason: "", capturedMinutes: 0 });
 
   // Live clock tick every minute
   useEffect(() => {
@@ -215,7 +236,7 @@ function ShiftPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  async function startShift() {
+  async function startShift(lateReason?: string, lateMins?: number) {
     if (!nurseId || !assignment || !["M", "N"].includes(assignment.shift)) return;
 
     const shiftType = assignment.shift as "M" | "N";
@@ -235,6 +256,8 @@ function ShiftPage() {
       .limit(1);
     const periodStart = winRow?.[0]?.shift_date ?? today;
 
+    const recordedLate = (lateMins ?? 0) > 0;
+
     const { error } = await supabase.from("shift_logs").insert({
       nurse_id: nurseId,
       shift_date: today,
@@ -242,10 +265,18 @@ function ShiftPage() {
       started_at: startedAt.toISOString(),
       expected_end_at: expectedEnd.toISOString(),
       period_start: periodStart,
+      is_late: recordedLate,
+      late_minutes: recordedLate ? lateMins : null,
+      late_reason: lateReason?.trim() || null,
     });
 
     if (error) return toast.error(error.message);
-    toast.success("Shift started — clock is running");
+    setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
+    toast.success(
+      recordedLate
+        ? `Shift started — ${lateMins}m late. Reason recorded.`
+        : "Shift started — clock is running",
+    );
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
     qc.invalidateQueries({ queryKey: ["my-period-logs"] });
   }
@@ -271,6 +302,26 @@ function ShiftPage() {
     qc.invalidateQueries({ queryKey: ["my-period-logs"] });
     qc.invalidateQueries({ queryKey: ["nurses"] });
   }
+
+  // ── Timing: when this shift is allowed to start ───────────────────────────
+
+  // The official start time for the nurse's shift today (08:00 M / 17:00 N).
+  const shiftStartTime = (() => {
+    if (!assignment || (assignment.shift !== "M" && assignment.shift !== "N")) return null;
+    const t = new Date();
+    t.setHours(assignment.shift === "M" ? 8 : 17, 0, 0, 0);
+    return t;
+  })();
+
+  // Minutes elapsed since the scheduled start (negative = not started yet).
+  const minutesSinceStart = shiftStartTime
+    ? Math.floor((now.getTime() - shiftStartTime.getTime()) / 60000)
+    : -Infinity;
+
+  // Button is only enabled once the shift has officially begun.
+  const canStartShift = minutesSinceStart >= 0;
+  // Late = more than 15 minutes after the scheduled start.
+  const isLate = minutesSinceStart > 15;
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -331,62 +382,165 @@ function ShiftPage() {
 
         {/* Active shift info */}
         {isActive && (
-          <div className="grid grid-cols-3 gap-3 mb-5">
-            <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Started</p>
-              <p className="font-semibold mt-0.5">{fmtTime(shiftLog.started_at)}</p>
+          <>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Started</p>
+                <p className="font-semibold mt-0.5">{fmtTime(shiftLog.started_at)}</p>
+              </div>
+              <div className="rounded-lg border bg-emerald-50 border-emerald-200 px-3 py-2.5 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-emerald-600">Elapsed</p>
+                <p className="font-semibold text-emerald-700 mt-0.5">{elapsed}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Ends at</p>
+                <p className="font-semibold mt-0.5">{fmtTime(shiftLog.expected_end_at)}</p>
+              </div>
             </div>
-            <div className="rounded-lg border bg-emerald-50 border-emerald-200 px-3 py-2.5 text-center">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-600">Elapsed</p>
-              <p className="font-semibold text-emerald-700 mt-0.5">{elapsed}</p>
-            </div>
-            <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Ends at</p>
-              <p className="font-semibold mt-0.5">{fmtTime(shiftLog.expected_end_at)}</p>
-            </div>
-          </div>
+            {shiftLog.is_late && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 mb-3 text-sm">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-semibold text-amber-800">
+                    Late start · {shiftLog.late_minutes}m after scheduled time
+                  </span>
+                  {shiftLog.late_reason && (
+                    <p className="text-amber-700 text-xs mt-0.5">{shiftLog.late_reason}</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Completed shift info */}
         {isEnded && (
-          <div className="grid grid-cols-3 gap-3 mb-5">
-            <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Started</p>
-              <p className="font-semibold mt-0.5">{fmtTime(shiftLog.started_at)}</p>
+          <>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Started</p>
+                <p className="font-semibold mt-0.5">{fmtTime(shiftLog.started_at)}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Ended</p>
+                <p className="font-semibold mt-0.5">{fmtTime(shiftLog.ended_at!)}</p>
+              </div>
+              <div className="rounded-lg border bg-primary/5 border-primary/20 px-3 py-2.5 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hours</p>
+                <p className="font-semibold text-primary mt-0.5">
+                  {shiftLog.hours_logged != null ? fmtHours(Number(shiftLog.hours_logged)) : "—"}
+                </p>
+              </div>
             </div>
-            <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Ended</p>
-              <p className="font-semibold mt-0.5">{fmtTime(shiftLog.ended_at!)}</p>
-            </div>
-            <div className="rounded-lg border bg-primary/5 border-primary/20 px-3 py-2.5 text-center">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hours</p>
-              <p className="font-semibold text-primary mt-0.5">
-                {shiftLog.hours_logged != null ? fmtHours(Number(shiftLog.hours_logged)) : "—"}
-              </p>
-            </div>
-          </div>
+            {shiftLog.is_late && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 mb-3 text-sm">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-semibold text-amber-800">
+                    Late start · {shiftLog.late_minutes}m after scheduled time
+                  </span>
+                  {shiftLog.late_reason && (
+                    <p className="text-amber-700 text-xs mt-0.5">{shiftLog.late_reason}</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Action buttons */}
         {hasShiftToday && !isEnded && (
-          <div className="flex gap-3">
-            {!shiftLog && (
-              <button
-                type="button"
-                onClick={startShift}
-                className="flex-1 h-11 rounded-lg bg-emerald-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 hover:bg-emerald-700 transition"
-              >
-                <PlayCircle className="h-5 w-5" /> Start Shift
-              </button>
+          <div className="space-y-3">
+            {/* Late reason prompt — shown when nurse is overdue and clicks Start */}
+            {lateDialog.open && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">
+                      Late start — {lateDialog.capturedMinutes} minutes past scheduled time
+                    </p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      A reason is required before the shift can be started.
+                    </p>
+                  </div>
+                </div>
+                <textarea
+                  value={lateDialog.reason}
+                  onChange={(e) => setLateDialog((d) => ({ ...d, reason: e.target.value }))}
+                  placeholder="e.g. Traffic delay, ward handover overran, personal emergency…"
+                  className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  rows={2}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void startShift(lateDialog.reason, lateDialog.capturedMinutes)
+                    }
+                    disabled={!lateDialog.reason.trim()}
+                    className="flex-1 h-9 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    <PlayCircle className="h-4 w-4" /> Confirm & Start Shift
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLateDialog({ open: false, reason: "", capturedMinutes: 0 })}
+                    className="px-4 h-9 rounded-md border text-sm font-medium hover:bg-muted transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
-            {isActive && (
-              <button
-                type="button"
-                onClick={() => endShift(shiftLog!)}
-                className="flex-1 h-11 rounded-lg border border-destructive/40 text-destructive text-sm font-semibold inline-flex items-center justify-center gap-2 hover:bg-destructive/5 transition"
-              >
-                <StopCircle className="h-5 w-5" /> End Shift Early
-              </button>
+
+            <div className="flex gap-3">
+              {!shiftLog && !lateDialog.open && (
+                <button
+                  type="button"
+                  disabled={!canStartShift}
+                  onClick={() => {
+                    if (isLate) {
+                      setLateDialog({
+                        open: true,
+                        reason: "",
+                        capturedMinutes: minutesSinceStart,
+                      });
+                    } else {
+                      void startShift();
+                    }
+                  }}
+                  className={cn(
+                    "flex-1 h-11 rounded-lg text-sm font-semibold inline-flex items-center justify-center gap-2 transition",
+                    canStartShift
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-muted text-muted-foreground cursor-not-allowed",
+                  )}
+                >
+                  <PlayCircle className="h-5 w-5" />
+                  {canStartShift
+                    ? "Start Shift"
+                    : shiftStartTime
+                      ? `Shift begins at ${fmtHHMM(shiftStartTime)}`
+                      : "Start Shift"}
+                </button>
+              )}
+              {isActive && (
+                <button
+                  type="button"
+                  onClick={() => endShift(shiftLog!)}
+                  className="flex-1 h-11 rounded-lg border border-destructive/40 text-destructive text-sm font-semibold inline-flex items-center justify-center gap-2 hover:bg-destructive/5 transition"
+                >
+                  <StopCircle className="h-5 w-5" /> End Shift Early
+                </button>
+              )}
+            </div>
+
+            {/* Help text when button is locked */}
+            {!shiftLog && !canStartShift && shiftStartTime && (
+              <p className="text-xs text-center text-muted-foreground">
+                The button unlocks at {fmtHHMM(shiftStartTime)} when your shift begins.
+              </p>
             )}
           </div>
         )}
@@ -449,10 +603,21 @@ function ShiftPage() {
                     {log.shift_type}
                   </span>
                   <div>
-                    <p className="font-medium">{log.shift_date}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium">{log.shift_date}</p>
+                      {log.is_late && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                          <AlertTriangle className="h-2.5 w-2.5" />
+                          {log.late_minutes}m late
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       {fmtTime(log.started_at)} → {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
                     </p>
+                    {log.is_late && log.late_reason && (
+                      <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
@@ -476,7 +641,16 @@ function ShiftPage() {
 // ── All-nurses shift hours view (admin / management roles) ────────────────────
 
 type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null; target_hours: number };
-type AllShiftLog = { nurse_id: string; hours_logged: number | null; shift_date: string; shift_type: string; started_at: string; ended_at: string | null };
+type AllShiftLog = {
+  nurse_id: string;
+  hours_logged: number | null;
+  shift_date: string;
+  shift_type: string;
+  started_at: string;
+  ended_at: string | null;
+  is_late: boolean;
+  late_minutes: number | null;
+};
 
 function AllNursesShiftView() {
   const [search, setSearch] = useState("");
@@ -495,7 +669,7 @@ function AllNursesShiftView() {
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_logs")
-        .select("nurse_id,hours_logged,shift_date,shift_type,started_at,ended_at")
+        .select("nurse_id,hours_logged,shift_date,shift_type,started_at,ended_at,is_late,late_minutes")
         .gte("shift_date", lbStr)
         .order("shift_date", { ascending: false });
       return (data ?? []) as AllShiftLog[];
@@ -506,12 +680,16 @@ function AllNursesShiftView() {
   const hoursMap = new Map<string, number>();
   const shiftsMap = new Map<string, number>();
   const activeMap = new Map<string, boolean>(); // currently running
+  const lateMap = new Map<string, number>(); // late-start count
   for (const l of logs) {
     if (l.hours_logged != null) {
       hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + l.hours_logged);
       shiftsMap.set(l.nurse_id, (shiftsMap.get(l.nurse_id) ?? 0) + 1);
     } else if (!l.ended_at) {
       activeMap.set(l.nurse_id, true);
+    }
+    if (l.is_late) {
+      lateMap.set(l.nurse_id, (lateMap.get(l.nurse_id) ?? 0) + 1);
     }
   }
 
@@ -581,6 +759,7 @@ function AllNursesShiftView() {
               <th className="text-right px-4 py-3 font-semibold">Shifts</th>
               <th className="text-right px-4 py-3 font-semibold">Hours</th>
               <th className="text-left px-4 py-3 font-semibold w-40">Progress</th>
+              <th className="text-right px-4 py-3 font-semibold">Late</th>
               <th className="text-left px-4 py-3 font-semibold">Status</th>
             </tr>
           </thead>
@@ -588,6 +767,7 @@ function AllNursesShiftView() {
             {filtered.map((n) => {
               const hrs = hoursMap.get(n.id) ?? 0;
               const shifts = shiftsMap.get(n.id) ?? 0;
+              const lateCount = lateMap.get(n.id) ?? 0;
               const target = n.target_hours || 160;
               const pct = Math.min(Math.round((hrs / target) * 100), 100);
               const isActive = activeMap.get(n.id) ?? false;
@@ -609,6 +789,16 @@ function AllNursesShiftView() {
                       <Progress value={pct} className="h-full rounded-full" />
                     </div>
                     <p className="text-[10px] text-muted-foreground mt-0.5">{pct}%</p>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {lateCount > 0 ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                        <AlertTriangle className="h-3 w-3" />
+                        {lateCount}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {isActive ? (

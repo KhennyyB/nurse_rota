@@ -210,6 +210,9 @@ export type Database = {
           hours_logged: number | null;
           period_start: string;
           created_at: string;
+          is_late: boolean;
+          late_minutes: number | null;
+          late_reason: string | null;
         };
         Insert: {
           id?: string;
@@ -222,6 +225,9 @@ export type Database = {
           hours_logged?: number | null;
           period_start: string;
           created_at?: string;
+          is_late?: boolean;
+          late_minutes?: number | null;
+          late_reason?: string | null;
         };
         Update: {
           id?: string;
@@ -234,6 +240,9 @@ export type Database = {
           hours_logged?: number | null;
           period_start?: string;
           created_at?: string;
+          is_late?: boolean;
+          late_minutes?: number | null;
+          late_reason?: string | null;
         };
         Relationships: [
           {
