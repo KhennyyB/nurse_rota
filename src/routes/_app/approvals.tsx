@@ -307,33 +307,45 @@ function ApprovalsPage() {
   // scope = "" → all staff  |  "__HEAD__" → head nurses only  |  ward name → that ward + its interns
   async function fetchWindowData(win: RotaWindow, scope = "") {
     const endDate = scheduleEndDate(win.startDate);
-    // Use a high explicit limit to override PostgREST's 1000-row default.
-    // 10 000 covers up to 357 nurses × 28 days in a single period.
-    const { data: assignData } = await supabase
-      .from("shift_assignments")
-      .select("nurse_id, shift_date, shift")
-      .gte("shift_date", win.startDate)
-      .lte("shift_date", endDate)
-      .eq("status", "published")
-      .limit(10000);
 
-    const assignments = (assignData ?? []) as { nurse_id: string; shift_date: string; shift: string }[];
-    const assignMap = new Map<string, string>();
-    assignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date}`, a.shift));
-
-    const activeIds = new Set(assignments.map((a) => a.nurse_id));
-    let activeNurses = allNurses.filter((n) => activeIds.has(n.id));
-
+    // Pre-filter to only the nurses we actually need for this export scope.
+    // Querying all nurses and discarding most rows is what caused the silent
+    // 1000-row PostgREST truncation (blank dates for the last ~9 days).
+    type NurseRow = { id: string; name: string; role: string; ward: string | null };
+    let scopedNurses: NurseRow[] = allNurses as NurseRow[];
     if (scope === "__HEAD__") {
-      activeNurses = activeNurses.filter((n) => isGlobalHead(n.role));
+      scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role));
     } else if (scope) {
-      // Ward export: ward nurses + interns whose assigned ward matches
-      activeNurses = activeNurses.filter(
-        (n) =>
-          !isGlobalHead(n.role) &&
-          parseWards(n.ward)[0] === scope,
+      scopedNurses = scopedNurses.filter(
+        (n) => !isGlobalHead(n.role) && parseWards(n.ward)[0] === scope,
       );
     }
+
+    // Batch by nurse IDs (50 per request → max 50 × 28 = 1 400 rows per batch),
+    // same pattern as the rota grid. This is completely immune to row-cap issues.
+    const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
+    const nurseIds = scopedNurses.map((n) => n.id);
+    const BATCH = 50;
+    for (let i = 0; i < nurseIds.length; i += BATCH) {
+      const { data } = await supabase
+        .from("shift_assignments")
+        .select("nurse_id, shift_date, shift")
+        .gte("shift_date", win.startDate)
+        .lte("shift_date", endDate)
+        .eq("status", "published")
+        .in("nurse_id", nurseIds.slice(i, i + BATCH));
+      if (data)
+        allAssignments.push(
+          ...(data as { nurse_id: string; shift_date: string; shift: string }[]),
+        );
+    }
+
+    const assignMap = new Map<string, string>();
+    allAssignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date}`, a.shift));
+
+    // Only list nurses who have at least one published assignment in this window.
+    const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
+    const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
 
     return { activeNurses, assignMap };
   }
