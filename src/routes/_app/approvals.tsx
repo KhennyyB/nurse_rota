@@ -39,6 +39,7 @@ type PendingRow = {
   status: string;
   nurse_id: string;
   ward: string | null;
+  shift: string | null;
 };
 
 type WindowStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
@@ -224,7 +225,7 @@ function ApprovalsPage() {
       // truncated and produce missing windows.
       const { data, error } = await supabase
         .from("shift_assignments")
-        .select("id, shift_date, status, nurse_id, ward")
+        .select("id, shift_date, status, nurse_id, ward, shift")
         .gte("shift_date", ymd(sixAgo))
         .lte("shift_date", ymd(threeAhead))
         .limit(50000);
@@ -579,6 +580,38 @@ td.sm{text-align:left;color:#444;min-width:55px}
               ...new Set(winNurses.map((n) => n.facility).filter((f): f is string => !!f)),
             ].sort();
 
+            // Nurses with above-baseline working shifts — indicates enforcement added extra shifts.
+            // Strategy: within each role group, anyone above the group minimum has extra shifts.
+            const winRows = rows.filter(
+              (r) =>
+                r.shift_date >= win.startDate &&
+                r.shift_date <= win.endDate &&
+                (win.ward !== null ? r.ward === win.ward : r.ward === null),
+            );
+            const winShiftCounts = new Map<string, number>();
+            for (const r of winRows) {
+              if (r.shift === "M" || r.shift === "N")
+                winShiftCounts.set(r.nurse_id, (winShiftCounts.get(r.nurse_id) ?? 0) + 1);
+            }
+            const byRole = new Map<string, string[]>();
+            for (const n of winNurses) {
+              const g = byRole.get(n.role) ?? [];
+              g.push(n.id);
+              byRole.set(n.role, g);
+            }
+            const extraStaff: { name: string; extra: number }[] = [];
+            for (const ids of byRole.values()) {
+              const counts = ids.map((id) => winShiftCounts.get(id) ?? 0);
+              const baseline = Math.min(...counts);
+              for (const id of ids) {
+                const diff = (winShiftCounts.get(id) ?? 0) - baseline;
+                if (diff > 0) {
+                  const nurse = winNurses.find((n) => n.id === id);
+                  if (nurse) extraStaff.push({ name: nurse.name, extra: diff });
+                }
+              }
+            }
+
             const currentFacility = exportFacility[key] ?? "";
 
             let canApprove = false;
@@ -626,6 +659,12 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       {fmtDate(win.startDate)} → {fmtDate(win.endDate)} · {win.nurseCount} nurses ·{" "}
                       {win.assignmentCount} assignments
                     </p>
+                    {extraStaff.length > 0 && (
+                      <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
+                        Extra shifts (safety enforcement):{" "}
+                        {extraStaff.map((e) => `${e.name} +${e.extra * 12} h`).join(", ")}
+                      </p>
+                    )}
                   </div>
                   <span
                     className={cn(

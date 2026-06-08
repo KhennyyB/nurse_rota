@@ -346,9 +346,11 @@ function enforceMinima(
   ward: WardInput,
   days: number,
   startDate: Date,
-): SafetyViolation[] {
+): { violations: SafetyViolation[]; extraPromos: Map<string, number> } {
   const nurseById = new Map(wardNurses.map((n) => [n.id, n]));
   const violations: SafetyViolation[] = [];
+  // Tracks how many times enforcement promoted each nurse from OFF → working.
+  const extraPromos = new Map<string, number>();
 
   // Cumulative M/N counts per nurse — updated at the end of each day so
   // promotion decisions always favour nurses with the fewest prior shifts.
@@ -402,9 +404,29 @@ function enforceMinima(
       for (const a of candidates) {
         if (deficit <= 0) break;
         a.shift = target;
+        extraPromos.set(a.nurse_id, (extraPromos.get(a.nurse_id) ?? 0) + 1);
         deficit--;
       }
       return Math.max(0, deficit);
+    };
+
+    // Trim a shift down to the exact target: move the excess back to OFF.
+    // Prefer demoting those who have accumulated the most of that shift type so
+    // the schedule stays balanced over time.
+    const demoteExcess = (
+      exact: number,
+      fromShift: ShiftCode,
+      roleTest: (r: string) => boolean,
+    ) => {
+      const excess = count(fromShift, roleTest) - exact;
+      if (excess <= 0) return;
+      const cum = fromShift === "M" ? mCum : nCum;
+      const candidates = dayAssignments
+        .filter((a) => a.shift === fromShift && roleTest(nurseById.get(a.nurse_id)?.role ?? ""))
+        .sort((a, b) => (cum.get(b.nurse_id) ?? 0) - (cum.get(a.nurse_id) ?? 0));
+      for (let i = 0; i < excess && i < candidates.length; i++) {
+        candidates[i].shift = "OFF";
+      }
     };
 
     // Reallocate Night → Morning (last resort): prefer nurses with fewest M shifts.
@@ -434,7 +456,10 @@ function enforceMinima(
       return deficit - moved;
     };
 
-    // --- Morning enforcement ---
+    // --- Morning enforcement (exact count) ---
+    // Demote any excess back to OFF first, then promote any deficit from OFF.
+    // This ensures the final count is exactly the configured target, not just ≥.
+    demoteExcess(ward.min_morning_supervisor, "M", isWardSupervisor);
     let supShortfall = promoteOff(
       ward.min_morning_supervisor,
       count("M", isWardSupervisor),
@@ -457,6 +482,7 @@ function enforceMinima(
         actual: ward.min_morning_supervisor - supShortfall,
       });
 
+    demoteExcess(ward.min_morning_nurses, "M", isNurseOrIntern);
     let nurseShortfall = promoteOff(
       ward.min_morning_nurses,
       count("M", isNurseOrIntern),
@@ -479,6 +505,7 @@ function enforceMinima(
         actual: ward.min_morning_nurses - nurseShortfall,
       });
 
+    demoteExcess(ward.min_morning_na, "M", isNAType);
     let naShortfall = promoteOff(ward.min_morning_na, count("M", isNAType), "M", isNAType);
     if (naShortfall > 0)
       naShortfall = reallocateNightToMorning(naShortfall, isNAType, ward.min_night_na);
@@ -492,7 +519,8 @@ function enforceMinima(
         actual: ward.min_morning_na - naShortfall,
       });
 
-    // --- Night enforcement ---
+    // --- Night enforcement (exact count) ---
+    demoteExcess(ward.min_night_supervisor, "N", isWardSupervisor);
     const nSupShortfall = promoteOff(
       ward.min_night_supervisor,
       count("N", isWardSupervisor),
@@ -509,6 +537,7 @@ function enforceMinima(
         actual: ward.min_night_supervisor - nSupShortfall,
       });
 
+    demoteExcess(ward.min_night_nurses, "N", isNurseOrIntern);
     const nNurseShortfall = promoteOff(
       ward.min_night_nurses,
       count("N", isNurseOrIntern),
@@ -525,6 +554,7 @@ function enforceMinima(
         actual: ward.min_night_nurses - nNurseShortfall,
       });
 
+    demoteExcess(ward.min_night_na, "N", isNAType);
     const nNaShortfall = promoteOff(ward.min_night_na, count("N", isNAType), "N", isNAType);
     if (nNaShortfall > 0)
       violations.push({
@@ -544,7 +574,7 @@ function enforceMinima(
     }
   }
 
-  return violations;
+  return { violations, extraPromos };
 }
 
 export function nextInternWard(currentWard: string | null, wardNames: string[]): string | null {
@@ -554,9 +584,17 @@ export function nextInternWard(currentWard: string | null, wardNames: string[]):
   return wardNames[(idx + 1) % wardNames.length];
 }
 
+export interface ExtraShift {
+  nurseId: string;
+  nurseName: string;
+  /** Number of extra shifts added by safety enforcement (each = 12 h). */
+  extraCount: number;
+}
+
 export interface ScheduleResult {
   assignments: DraftAssignment[];
   violations: SafetyViolation[];
+  extraShifts: ExtraShift[];
 }
 
 /**
@@ -580,6 +618,7 @@ export function generateSchedule(opts: {
   const out: DraftAssignment[] = [];
   const scheduled = new Set<string>();
   const allViolations: SafetyViolation[] = [];
+  const allExtraShifts: ExtraShift[] = [];
 
   // 1. Coverage Nurses (global, not ward-bound)
   const headNurses = nurses.filter((n) => isGlobalHead(n.role));
@@ -651,8 +690,18 @@ export function generateSchedule(opts: {
     // no nurses here), we skip enforcement — it would always report violations
     // of every minimum since there is literally nobody scheduled.
     if (wardNurses.length > 0) {
-      const wardViolations = enforceMinima(out, wardNurses, ward, days, opts.startDate);
+      const { violations: wardViolations, extraPromos } = enforceMinima(
+        out,
+        wardNurses,
+        ward,
+        days,
+        opts.startDate,
+      );
       allViolations.push(...wardViolations);
+      for (const [id, count] of extraPromos) {
+        const nurse = wardNurses.find((n) => n.id === id);
+        if (nurse) allExtraShifts.push({ nurseId: id, nurseName: nurse.name, extraCount: count });
+      }
     }
     wardNurses.forEach((n) => scheduled.add(n.id));
   }
@@ -673,5 +722,5 @@ export function generateSchedule(opts: {
     }
   }
 
-  return { assignments: out, violations: allViolations };
+  return { assignments: out, violations: allViolations, extraShifts: allExtraShifts };
 }

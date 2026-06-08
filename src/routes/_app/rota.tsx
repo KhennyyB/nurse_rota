@@ -29,6 +29,7 @@ import {
   type WardInput,
   type LeaveInput,
   type SafetyViolation,
+  type ExtraShift,
 } from "@/lib/auto-schedule";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -148,6 +149,9 @@ function RotaPage() {
     ward: "",
     rotateInterns: false,
   });
+
+  // Extra shifts added by safety enforcement during the last auto-generate run.
+  const [extraShifts, setExtraShifts] = useState<ExtraShift[]>([]);
 
   // Drag — ref for event handlers (synchronous), state only for visual ring
   const draggingRef = useRef<Assignment | null>(null);
@@ -286,6 +290,17 @@ function RotaPage() {
     assignments.forEach((a) => m.set(`${a.nurse_id}|${a.shift_date}`, a));
     return m;
   }, [assignments]);
+
+  // Total working hours (M+N shifts × 12 h) per nurse for the current period.
+  const nurseShiftCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    assignments.forEach((a) => {
+      if (a.shift === "M" || a.shift === "N") m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + 1);
+    });
+    return m;
+  }, [assignments]);
+
+  const extraShiftIds = useMemo(() => new Set(extraShifts.map((e) => e.nurseId)), [extraShifts]);
 
   // Unique role values derived from the loaded nurses list (for the role filter dropdown).
   const availableRoles = useMemo(
@@ -536,7 +551,11 @@ function RotaPage() {
         }
       }
 
-      const { assignments: draft, violations } = generateSchedule({
+      const {
+        assignments: draft,
+        violations,
+        extraShifts: genExtra,
+      } = generateSchedule({
         nurses: schedulingNurses,
         wards: facilityWards,
         leave,
@@ -680,6 +699,7 @@ function RotaPage() {
         target: `${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""} · ${ymd(genStart)} → ${ymd(genEnd)}`,
       });
 
+      setExtraShifts(genExtra);
       toast.success(
         `28-day draft generated for ${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""}${statusNote}`,
       );
@@ -714,6 +734,7 @@ function RotaPage() {
       }
     }
     setBusy(false);
+    setExtraShifts([]);
     toast.success("Draft cleared");
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
@@ -986,6 +1007,25 @@ function RotaPage() {
         </div>
       )}
 
+      {extraShifts.length > 0 && (
+        <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-orange-300 bg-orange-50 px-4 py-3 text-sm dark:border-orange-700 dark:bg-orange-950/30">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-orange-600 dark:text-orange-400" />
+          <div>
+            <p className="font-semibold text-orange-900 dark:text-orange-200">
+              Extra shifts assigned to meet safety requirements
+            </p>
+            <p className="mt-0.5 text-xs text-orange-800 dark:text-orange-300">
+              {extraShifts
+                .map(
+                  (e) =>
+                    `${e.nurseName} (+${e.extraCount} shift${e.extraCount > 1 ? "s" : ""}, +${e.extraCount * 12} h)`,
+                )
+                .join(" · ")}
+            </p>
+          </div>
+        </div>
+      )}
+
       <Legend />
 
       {/* Rota table */}
@@ -1027,6 +1067,7 @@ function RotaPage() {
                     Nurse
                   </th>
                   <th className="text-left font-semibold px-2 py-3 min-w-24">Ward</th>
+                  <th className="text-center font-semibold px-2 py-3 min-w-14">Hrs</th>
                   {days.map((dt) => (
                     <th
                       key={ymd(dt)}
@@ -1065,6 +1106,17 @@ function RotaPage() {
                           </>
                         );
                       })()}
+                    </td>
+                    <td className="px-2 py-2 text-center text-xs font-medium tabular-nums">
+                      <span
+                        className={cn(
+                          extraShiftIds.has(n.id)
+                            ? "text-orange-600 dark:text-orange-400"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {(nurseShiftCounts.get(n.id) ?? 0) * 12}h
+                      </span>
                     </td>
                     {days.map((dt) => {
                       const dateStr = ymd(dt);
