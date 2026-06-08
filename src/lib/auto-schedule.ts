@@ -364,6 +364,17 @@ function enforceMinima(
 
     const dayAssignments = out.filter((a) => a.shift_date === dateStr && nurseById.has(a.nurse_id));
 
+    // Re-apply the N→M rest rule using ENFORCED (not cycle) prior shifts.
+    // scheduleGroup.prevShift only tracks cycle-computed shifts; if enforcement
+    // promoted a nurse to N on day D, the pre-built cycle may still have M for
+    // that nurse on day D+1. Correct those assignments here so the counts below
+    // are accurate before any promotion logic runs.
+    for (const a of dayAssignments) {
+      if (a.shift === "M" && prevDayShift.get(a.nurse_id) === "N") {
+        a.shift = "OFF";
+      }
+    }
+
     const count = (shift: ShiftCode, roleTest: (r: string) => boolean) =>
       dayAssignments.filter(
         (a) => a.shift === shift && roleTest(nurseById.get(a.nurse_id)?.role ?? ""),
@@ -407,7 +418,12 @@ function enforceMinima(
       const movable = Math.min(deficit, Math.max(0, surplus));
       if (movable <= 0) return deficit;
       const candidates = dayAssignments
-        .filter((a) => a.shift === "N" && roleTest(nurseById.get(a.nurse_id)?.role ?? ""))
+        .filter(
+          (a) =>
+            a.shift === "N" &&
+            roleTest(nurseById.get(a.nurse_id)?.role ?? "") &&
+            prevDayShift.get(a.nurse_id) !== "N",
+        )
         .sort((a, b) => (mCum.get(a.nurse_id) ?? 0) - (mCum.get(b.nurse_id) ?? 0));
       let moved = 0;
       for (const a of candidates) {
