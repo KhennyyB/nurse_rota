@@ -336,16 +336,18 @@ function RotaPage() {
       }));
   }, [leave, days, cellMap, nurses]);
 
-  // Derive the dominant lock status for the visible window.
-  // Any status other than "draft" locks all editing and toolbar actions.
-  // The lock lifts only when the rota is returned to "draft" via Approvals.
+  // Derive the dominant lock status for the FILTERED view only.
+  // If the user has filtered to a specific ward, only that ward's assignments
+  // determine the lock — so other wards (still in draft) remain editable.
   const windowLockStatus = useMemo(() => {
-    if (assignments.some((a) => a.status === "published")) return "published" as const;
-    if (assignments.some((a) => a.status === "approved_cno")) return "approved_cno" as const;
-    if (assignments.some((a) => a.status === "approved_chief")) return "approved_chief" as const;
-    if (assignments.some((a) => a.status === "submitted")) return "submitted" as const;
+    const filteredIds = new Set(filteredNurses.map((n) => n.id));
+    const relevant = assignments.filter((a) => filteredIds.has(a.nurse_id));
+    if (relevant.some((a) => a.status === "published")) return "published" as const;
+    if (relevant.some((a) => a.status === "approved_cno")) return "approved_cno" as const;
+    if (relevant.some((a) => a.status === "approved_chief")) return "approved_chief" as const;
+    if (relevant.some((a) => a.status === "submitted")) return "submitted" as const;
     return "draft" as const;
-  }, [assignments]);
+  }, [assignments, filteredNurses]);
 
   const isWindowLocked = windowLockStatus !== "draft";
 
@@ -387,6 +389,27 @@ function RotaPage() {
           : "No staff found for the selected facility",
       );
       return;
+    }
+
+    // Block regeneration if this ward's schedule is already in the approval pipeline.
+    // (Published assignments are preserved by the delete step below; only draft is safe to overwrite.)
+    if (isWardRun && wardNurses.length > 0) {
+      const wardIds = wardNurses.map((n) => n.id);
+      const { data: inApprovalRows } = await supabase
+        .from("shift_assignments")
+        .select("status")
+        .gte("shift_date", ymd(genStart))
+        .lte("shift_date", ymd(genEnd))
+        .in("nurse_id", wardIds.slice(0, 200))
+        .in("status", ["submitted", "approved_chief", "approved_cno"])
+        .limit(1);
+      if (inApprovalRows?.length) {
+        toast.error(
+          `"${genForm.ward}" is in the approval process. Return it to draft from the Approvals page before regenerating.`,
+          { duration: 8000 },
+        );
+        return;
+      }
     }
 
     // For ward runs: include head nurses and interns only if they have no
@@ -684,19 +707,30 @@ function RotaPage() {
 
   async function handleSubmitRota() {
     setBusy(true);
-    const { error } = await supabase
-      .from("shift_assignments")
-      .update({ status: "submitted" })
-      .gte("shift_date", ymd(startDate))
-      .lte("shift_date", ymd(endDate))
-      .eq("status", "draft");
+    // Submit only the currently filtered nurses so that selecting "IP Ward" and
+    // clicking Submit does not also submit ICU, NICU, etc. in the same period.
+    const ids = filteredNurses.map((n) => n.id);
+    const BATCH = 200;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const { error } = await supabase
+        .from("shift_assignments")
+        .update({ status: "submitted" })
+        .gte("shift_date", ymd(startDate))
+        .lte("shift_date", ymd(endDate))
+        .eq("status", "draft")
+        .in("nurse_id", ids.slice(i, i + BATCH));
+      if (error) {
+        setBusy(false);
+        return toast.error(error.message);
+      }
+    }
     setBusy(false);
-    if (error) return toast.error(error.message);
+    const wardLabel = selectedWard || selectedFacility || "all wards";
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
       action: "Submitted rota for approval",
-      target: `${ymd(startDate)} → ${ymd(endDate)}`,
+      target: `${ymd(startDate)} → ${ymd(endDate)} (${wardLabel})`,
     });
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
@@ -860,7 +894,17 @@ function RotaPage() {
 
         <div className="flex-1" />
 
-        {/* Actions */}
+        {/* Actions — generate is always visible; lock indicator and edit actions depend on ward status */}
+        {canGenerate && (
+          <button
+            type="button"
+            onClick={openGenDialog}
+            disabled={busy}
+            className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <Wand2 className="h-4 w-4" /> Auto-generate
+          </button>
+        )}
         {isWindowLocked ? (
           <span
             className={cn(
@@ -886,16 +930,6 @@ function RotaPage() {
           </span>
         ) : (
           <>
-            {canGenerate && (
-              <button
-                type="button"
-                onClick={openGenDialog}
-                disabled={busy}
-                className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
-              >
-                <Wand2 className="h-4 w-4" /> Auto-generate
-              </button>
-            )}
             {canEdit && (
               <button
                 type="button"
