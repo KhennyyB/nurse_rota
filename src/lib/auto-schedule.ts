@@ -1,10 +1,10 @@
 // Auto-scheduling engine for the 28-day rota.
 //
-// Nurse/NA cycle (12-day): M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF  (3M, 3N, 6OFF)
-// Coverage Nurse cycle (7-day): M→M→M→N→N→OFF→OFF  (3M, 2N, 2 consecutive OFF days)
+// Nurse cycle (12-day): M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF  (3M, 3N, 6OFF)
+// Coverage Nurse cycle (5-day): M→M→N→OFF→OFF  (2M, 1N, 2 consecutive OFF days)
+// NA cycle (6-day): M→M→M→N→OFF→OFF  (3M, 1N, 2OFF — morning-biased base; enforceMinima tops up night)
 // Ward Supervisor cycle (4-day): M→M→M→OFF  (mornings only, non-Ikoyi)
-// Intern Nurses: NURSE_CYCLE, one per ward, phases staggered so off-days
-//   never fall on the same day across wards.
+// Intern Nurses: NURSE_CYCLE, same phase per ward so all interns share equal M/N/OFF counts.
 // Rest rule: N on day d → cannot work M on day d+1.
 
 export type ShiftCode = "M" | "N" | "OFF" | "LEAVE";
@@ -74,13 +74,21 @@ const NURSE_CYCLE: readonly ShiftCode[] = [
   "OFF",
 ];
 
-// 7-day cycle for Coverage Nurses: 3M + 2N + 2 consecutive OFF days.
-// Pattern: M→M→M→N→N→OFF→OFF. Nights always followed by rest (N→N ok, N→OFF ok).
-// Wraparound: OFF→M ✓ (rested day before fresh mornings).
-const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "N", "N", "OFF", "OFF"];
+// 5-day cycle for Coverage Nurses: 2M + 1N + 2 consecutive OFF days.
+// Pattern: M→M→N→OFF→OFF. Night always followed by OFF ✓; no N→M.
+// Wraparound: OFF→M ✓.
+const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "M", "N", "OFF", "OFF"];
 
 // 4-day block cycle for ward supervisors (shift leaders): 3 mornings → 1 off.
 const SUPERVISOR_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "OFF"];
+
+// 6-day cycle for Nursing Assistants: 3M + 1N + 2 consecutive OFF days.
+// Morning-biased so most wards (which need more morning NAs than night) hit
+// their minimum without heavy enforcement. enforceMinima promotes additional
+// OFF→N on days that are still short on night NAs.
+// Pattern: M→M→M→N→OFF→OFF. No N→M violation anywhere (N at pos 3 → OFF ✓).
+// Wraparound: OFF→M ✓.
+const NA_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "N", "OFF", "OFF"];
 
 type WardMins = Pick<
   WardInput,
@@ -562,8 +570,10 @@ export function generateSchedule(opts: {
   scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out, periodOffset);
   headNurses.forEach((n) => scheduled.add(n.id));
 
-  // 2. Intern Nurses — one per ward, phases spread evenly across the cycle so
-  //    no two wards share the same off-days.
+  // 2. Intern Nurses — grouped by ward, phases staggered across wards so
+  //    different wards don't share the same off-days.
+  //    Each intern in a ward is scheduled individually with the SAME phase so
+  //    all interns in that ward share an identical M/N/OFF pattern → equal shift counts.
   const interns = nurses.filter((n) => isInternType(n.role));
   const internsByWard = new Map<string | null, NurseInput[]>();
   for (const intern of interns) {
@@ -576,21 +586,23 @@ export function generateSchedule(opts: {
   const numInternGroups = internGroupList.length;
   for (let gi = 0; gi < numInternGroups; gi++) {
     const [ward, group] = internGroupList[gi];
-    // Distribute stagger phases so interns in different wards start at different
-    // cycle positions; add periodOffset so the cycle continues across periods.
     const stagger =
       numInternGroups > 1 ? Math.round((gi * NURSE_CYCLE.length) / numInternGroups) : 0;
-    scheduleGroup(
-      group,
-      NURSE_CYCLE,
-      days,
-      opts.startDate,
-      leave,
-      ward,
-      out,
-      periodOffset + stagger,
-    );
-    group.forEach((n) => scheduled.add(n.id));
+    // Schedule each intern as a solo group (N=1) with the ward's shared phase
+    // so computeShift always picks the same cycle position for every intern in this ward.
+    for (const intern of group) {
+      scheduleGroup(
+        [intern],
+        NURSE_CYCLE,
+        days,
+        opts.startDate,
+        leave,
+        ward,
+        out,
+        periodOffset + stagger,
+      );
+      scheduled.add(intern.id);
+    }
   }
 
   // 3. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
@@ -616,7 +628,7 @@ export function generateSchedule(opts: {
       periodOffset,
     );
     scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
-    scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
+    scheduleGroup(nas, NA_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
 
     // Only validate safety rules for wards that have staff in this run.
     // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
