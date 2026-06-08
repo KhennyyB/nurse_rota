@@ -46,7 +46,7 @@ const NURSE_ROLES = [
   "Senior Nurse",
   "Coverage Nurse",
   "Intern Nurse",
-  "Nursing Assistant",
+  "Nurse Assistant",
 ] as const;
 
 // Coverage Nurses and Intern Nurses are scheduled independently — no ward is tagged.

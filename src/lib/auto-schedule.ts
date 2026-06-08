@@ -82,7 +82,7 @@ const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "M", "N", "OFF", "OFF"];
 // 4-day block cycle for ward supervisors (shift leaders): 3 mornings → 1 off.
 const SUPERVISOR_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "OFF"];
 
-// 6-day cycle for Nursing Assistants: 3M + 1N + 2 consecutive OFF days.
+// 6-day cycle for Nurse Assistants: 3M + 1N + 2 consecutive OFF days.
 // Morning-biased so most wards (which need more morning NAs than night) hit
 // their minimum without heavy enforcement. enforceMinima promotes additional
 // OFF→N on days that are still short on night NAs.
@@ -208,7 +208,7 @@ function inLeave(leave: LeaveInput[], nurseId: string, dateStr: string) {
 }
 
 export function isNAType(role: string) {
-  return /nurs(e|ing)\s*assistant/i.test(role);
+  return /nurse\s*assistant/i.test(role);
 }
 
 export function isInternType(role: string) {
