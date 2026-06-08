@@ -261,12 +261,30 @@ function ApprovalsPage() {
 
   async function advance(win: RotaWindow, nextStatus: AssignmentStatus) {
     setBusy(winKey(win));
-    const base = supabase
-      .from("shift_assignments")
-      .update({ status: nextStatus })
-      .gte("shift_date", win.startDate)
-      .lte("shift_date", win.endDate)
-      .eq("status", win.status);
+
+    // For every step except Publish: only promote rows at the exact current status
+    // so the approval chain is respected.
+    // For Publish: promote ALL non-published rows in the window so assignments that
+    // were added or regenerated after the window entered approval (still sitting at
+    // "draft" or an earlier approval step) are not left behind with a stale status
+    // that would prevent nurses from starting their shift.
+    const buildBase = (statusFilter: string) =>
+      supabase
+        .from("shift_assignments")
+        .update({ status: nextStatus })
+        .gte("shift_date", win.startDate)
+        .lte("shift_date", win.endDate)
+        .neq("status", statusFilter);
+
+    const buildExact = () =>
+      supabase
+        .from("shift_assignments")
+        .update({ status: nextStatus })
+        .gte("shift_date", win.startDate)
+        .lte("shift_date", win.endDate)
+        .eq("status", win.status);
+
+    const base = nextStatus === "published" ? buildBase("published") : buildExact();
     const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
     setBusy(null);
     if (error) return toast.error(error.message);

@@ -126,10 +126,12 @@ function ShiftPage() {
 
   // ── Queries ───────────────────────────────────────────────────────────────
 
-  // Today's rota assignment
+  // Today's rota assignment — poll every 30 s so the Start Shift button unlocks
+  // automatically once an admin publishes the rota without the nurse needing to reload.
   const { data: assignment } = useQuery<Assignment | null>({
     queryKey: ["my-assignment", nurseId, today],
     enabled: !!nurseId,
+    refetchInterval: 30000,
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_assignments")
