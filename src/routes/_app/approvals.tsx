@@ -183,10 +183,8 @@ function ApprovalsPage() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
-  // export selection keyed by window startDate
+  // Facility filter keyed by winKey — only used for Coverage Nurse cards that span facilities.
   const [exportFacility, setExportFacility] = useState<Record<string, string>>({});
-  // exportScope: "" = all staff, "__HEAD__" = coverage nurses, ward name = that ward
-  const [exportScope, setExportScope] = useState<Record<string, string>>({});
 
   const canApproveChief = hasAnyRole(["admin", "chief_matron"]);
   const canApproveCNO = hasAnyRole(["admin", "cno"]);
@@ -396,8 +394,10 @@ function ApprovalsPage() {
 
   async function handleDownloadExcel(win: RotaWindow) {
     const key = winKey(win);
-    const facility = exportFacility[key] ?? "";
-    const scope = exportScope[key] ?? "";
+    // Ward-specific cards auto-scope to the card's ward.
+    // Coverage-nurse cards use the facility filter (if set) and scope to heads.
+    const scope = win.ward !== null ? win.ward : "__HEAD__";
+    const facility = win.ward !== null ? "" : (exportFacility[key] ?? "");
     setDownloading(key + "-xlsx");
     try {
       const [XLSX, { activeNurses, assignMap }] = await Promise.all([
@@ -453,8 +453,8 @@ function ApprovalsPage() {
 
   async function handleDownloadPdf(win: RotaWindow) {
     const key = winKey(win);
-    const facility = exportFacility[key] ?? "";
-    const scope = exportScope[key] ?? "";
+    const scope = win.ward !== null ? win.ward : "__HEAD__";
+    const facility = win.ward !== null ? "" : (exportFacility[key] ?? "");
     setDownloading(key + "-pdf");
     try {
       const { activeNurses, assignMap } = await fetchWindowData(win, facility, scope);
@@ -580,19 +580,6 @@ td.sm{text-align:left;color:#444;min-width:55px}
             ].sort();
 
             const currentFacility = exportFacility[key] ?? "";
-            const currentScope = exportScope[key] ?? "";
-            const exportNurses = currentFacility
-              ? winNurses.filter((n) => n.facility === currentFacility)
-              : winNurses;
-            const hasHeads = exportNurses.some((n) => isGlobalHead(n.role));
-            const exportWards = [
-              ...new Set(
-                exportNurses
-                  .filter((n) => !isGlobalHead(n.role))
-                  .map((n) => parseWards(n.ward)[0])
-                  .filter((w): w is string => !!w),
-              ),
-            ].sort();
 
             let canApprove = false;
             let nextStatus: AssignmentStatus = "draft";
@@ -629,14 +616,15 @@ td.sm{text-align:left;color:#444;min-width:55px}
                 {/* Header */}
                 <div className="px-5 py-4 border-b flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    {/* Ward title — primary identifier for the card */}
                     <p className="text-base font-semibold">{win.ward ?? "Coverage Nurses"}</p>
+                    {winFacilities.length > 0 && (
+                      <p className="text-xs font-medium text-muted-foreground mt-0.5">
+                        {winFacilities.join(" · ")}
+                      </p>
+                    )}
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {fmtDate(win.startDate)} → {fmtDate(win.endDate)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {win.nurseCount} nurses · {win.assignmentCount} assignments
-                      {winFacilities.length > 0 && <span> · {winFacilities.join(", ")}</span>}
+                      {fmtDate(win.startDate)} → {fmtDate(win.endDate)} · {win.nurseCount} nurses ·{" "}
+                      {win.assignmentCount} assignments
                     </p>
                   </div>
                   <span
@@ -761,25 +749,25 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           </button>
                         )}
 
-                        {/* Export: Facility → Ward → download buttons */}
+                        {/* Export — scoped automatically to this card's ward.
+                            Coverage Nurse cards with multiple facilities expose a facility filter. */}
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {winFacilities.length > 1 && (
+                          {win.ward === null && winFacilities.length > 1 && (
                             <label className="flex items-center gap-1.5">
                               <span className="text-xs text-muted-foreground font-medium">
                                 Facility:
                               </span>
                               <select
                                 value={currentFacility}
-                                onChange={(e) => {
+                                onChange={(e) =>
                                   setExportFacility((prev) => ({
                                     ...prev,
                                     [key]: e.target.value,
-                                  }));
-                                  setExportScope((prev) => ({ ...prev, [key]: "" }));
-                                }}
+                                  }))
+                                }
                                 className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
                               >
-                                <option value="">All</option>
+                                <option value="">All Facilities</option>
                                 {winFacilities.map((f) => (
                                   <option key={f} value={f}>
                                     {f}
@@ -788,28 +776,6 @@ td.sm{text-align:left;color:#444;min-width:55px}
                               </select>
                             </label>
                           )}
-
-                          <label className="flex items-center gap-1.5">
-                            <span className="text-xs text-muted-foreground font-medium">Ward:</span>
-                            <select
-                              value={currentScope}
-                              onChange={(e) =>
-                                setExportScope((prev) => ({
-                                  ...prev,
-                                  [key]: e.target.value,
-                                }))
-                              }
-                              className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
-                            >
-                              <option value="">All Staff</option>
-                              {hasHeads && <option value="__HEAD__">Coverage Nurses</option>}
-                              {exportWards.map((w) => (
-                                <option key={w} value={w}>
-                                  {w}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
 
                           <button
                             type="button"
