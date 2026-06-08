@@ -475,9 +475,9 @@ function RotaPage() {
 
     const statusNote =
       isWardRun && !includeHeads && !includeInterns
-        ? " (Head Nurses & Interns kept from previous run)"
+        ? " (Coverage Nurses & Interns kept from previous run)"
         : isWardRun && (includeHeads || includeInterns)
-          ? " (incl. Head Nurses & Interns — first run)"
+          ? " (incl. Coverage Nurses & Interns — first run)"
           : "";
 
     setGenOpen(false);

@@ -44,14 +44,14 @@ const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 const NURSE_ROLES = [
   "Nurse",
   "Senior Nurse",
-  "Head Nurse",
+  "Coverage Nurse",
   "Intern Nurse",
   "Nursing Assistant",
 ] as const;
 
-// Head Nurses and Intern Nurses are scheduled independently — no ward is tagged.
+// Coverage Nurses and Intern Nurses are scheduled independently — no ward is tagged.
 function isNoWardRole(role: string) {
-  return /^head\s*nurse$|^intern\s*nurse$|^nurse\s*intern$/i.test(role);
+  return /^(head|coverage)\s*nurse$|^intern\s*nurse$|^nurse\s*intern$/i.test(role);
 }
 
 function parseWards(ward: string | null): string[] {
@@ -912,7 +912,7 @@ export function Modal({
 
 const LOGIN_ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: "nurse", label: "Nurse" },
-  { value: "head_nurse", label: "Head Nurse" },
+  { value: "head_nurse", label: "Coverage Nurse" },
   { value: "hr_admin", label: "HR / Admin" },
   { value: "chief_matron", label: "Chief Matron" },
   { value: "cno", label: "Chief Nursing Officer (CNO)" },

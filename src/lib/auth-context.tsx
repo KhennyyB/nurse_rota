@@ -175,7 +175,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "System Administrator",
   cno: "Chief Nursing Officer",
   chief_matron: "Chief Matron",
-  head_nurse: "Head Nurse",
+  head_nurse: "Coverage Nurse",
   hr_admin: "HR / Admin",
   nurse: "Nurse",
 };
@@ -184,7 +184,7 @@ export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
   admin: "Full system access — manage staff, wards, users and all settings",
   cno: "Approve rotas, manage shift switches and oversee all facilities",
   chief_matron: "Review and approve rotas, manage leave and ward staffing",
-  head_nurse: "Manage schedules, approve leave and supervise nursing staff",
+  head_nurse: "Provide coverage across wards, manage schedules and approve leave",
   hr_admin: "Manage staff records, leave requests and HR administration",
   nurse: "View your schedule, submit leave requests and access rota",
 };

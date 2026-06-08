@@ -1,10 +1,11 @@
 // Auto-scheduling engine for the 28-day rota.
 //
-// Nurse/NA cycle (12-day): M→N→M→OFF→OFF→OFF→N→M→N→OFF→OFF→OFF
-// Head Nurse cycle (7-day): M→N→M→N→M→OFF→OFF  (5 on, 2 off, both shifts)
+// Nurse/NA cycle (12-day): M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF  (3M, 3N, 6OFF)
+// Coverage Nurse cycle (7-day): M→N→OFF→M→N→OFF→M  (3M, 2N, 2OFF; 5 working days)
 // Ward Supervisor cycle (4-day): M→M→M→OFF  (mornings only, non-Ikoyi)
 // Intern Nurses: NURSE_CYCLE, one per ward, phases staggered so off-days
 //   never fall on the same day across wards.
+// Rest rule: N on day d → cannot work M on day d+1.
 
 export type ShiftCode = "M" | "N" | "OFF" | "LEAVE";
 
@@ -56,24 +57,26 @@ export interface SafetyViolation {
   actual: number;
 }
 
-// 12-day block cycle: 3 mixed shifts → 3 off → 3 mixed shifts → 3 off.
+// 12-day cycle: 3M + 3N + 6OFF, arranged so every N is followed by at least one
+// OFF (never directly by M). Pattern: M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF.
 const NURSE_CYCLE: readonly ShiftCode[] = [
   "M",
   "N",
+  "OFF",
+  "OFF",
   "M",
   "OFF",
-  "OFF",
-  "OFF",
-  "N",
-  "M",
   "N",
   "OFF",
   "OFF",
+  "M",
+  "N",
   "OFF",
 ];
 
-// 7-day cycle for Head Nurses: 5 working days (M + N), 2 rest.
-const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "N", "M", "N", "M", "OFF", "OFF"];
+// 7-day cycle for Coverage Nurses: 3M + 2N + 2OFF, N always followed by OFF.
+// Pattern: M→N→OFF→M→N→OFF→M.
+const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "N", "OFF", "M", "N", "OFF", "M"];
 
 // 4-day block cycle for ward supervisors (shift leaders): 3 mornings → 1 off.
 const SUPERVISOR_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "OFF"];
@@ -204,7 +207,7 @@ export function isInternType(role: string) {
 }
 
 export function isGlobalHead(role: string) {
-  return /^head\s*nurse$/i.test(role);
+  return /^(head|coverage)\s*nurse$/i.test(role);
 }
 
 export function isWardSupervisor(role: string) {
@@ -252,6 +255,8 @@ function scheduleGroup(
   // shifts fairly instead of always burdening the first nurse in the array.
   const mCount = new Array<number>(N).fill(0);
   const nCount = new Array<number>(N).fill(0);
+  // Track each nurse's shift from the previous day to enforce the N→M rest rule.
+  const prevShift = new Array<ShiftCode | null>(N).fill(null);
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
@@ -275,7 +280,10 @@ function scheduleGroup(
     const rotation: { i: number; shift: ShiftCode }[] = [];
     for (let i = 0; i < N; i++) {
       if (onLeave.has(i)) continue;
-      rotation.push({ i, shift: computeShift(i, d + phase, N, cycle) });
+      let shift = computeShift(i, d + phase, N, cycle);
+      // Rest rule: cannot work morning shift the day after a night shift.
+      if (shift === "M" && prevShift[i] === "N") shift = "OFF";
+      rotation.push({ i, shift });
     }
 
     // Cover M vacancies: pick OFF nurses with fewest accumulated M shifts first.
@@ -303,6 +311,7 @@ function scheduleGroup(
     }
 
     for (const r of rotation) {
+      prevShift[r.i] = r.shift;
       if (r.shift === "M") mCount[r.i]++;
       else if (r.shift === "N") nCount[r.i]++;
       out.push({ nurse_id: group[r.i].id, ward: wardName, shift_date: dateStr, shift: r.shift });
@@ -336,6 +345,8 @@ function enforceMinima(
   // promotion decisions always favour nurses with the fewest prior shifts.
   const mCum = new Map<string, number>(wardNurses.map((n) => [n.id, 0]));
   const nCum = new Map<string, number>(wardNurses.map((n) => [n.id, 0]));
+  // Track the previous day's shift per nurse to enforce the N→M rest rule.
+  const prevDayShift = new Map<string, ShiftCode>();
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
@@ -360,7 +371,13 @@ function enforceMinima(
       if (deficit <= 0) return 0;
       const cum = target === "M" ? mCum : nCum;
       const candidates = dayAssignments
-        .filter((a) => a.shift === "OFF" && roleTest(nurseById.get(a.nurse_id)?.role ?? ""))
+        .filter((a) => {
+          if (a.shift !== "OFF") return false;
+          if (!roleTest(nurseById.get(a.nurse_id)?.role ?? "")) return false;
+          // Rest rule: don't promote to M a nurse who worked N yesterday.
+          if (target === "M" && prevDayShift.get(a.nurse_id) === "N") return false;
+          return true;
+        })
         .sort((a, b) => (cum.get(a.nurse_id) ?? 0) - (cum.get(b.nurse_id) ?? 0));
       for (const a of candidates) {
         if (deficit <= 0) break;
@@ -494,9 +511,9 @@ function enforceMinima(
         actual: ward.min_night_na - nNaShortfall,
       });
 
-    // Update cumulative counts from today's finalized assignments so tomorrow's
-    // promotion decisions use accurate history.
+    // Update cumulative counts and prev-shift map from today's finalized assignments.
     for (const a of dayAssignments) {
+      prevDayShift.set(a.nurse_id, a.shift);
       if (a.shift === "M") mCum.set(a.nurse_id, (mCum.get(a.nurse_id) ?? 0) + 1);
       else if (a.shift === "N") nCum.set(a.nurse_id, (nCum.get(a.nurse_id) ?? 0) + 1);
     }
@@ -539,7 +556,7 @@ export function generateSchedule(opts: {
   const scheduled = new Set<string>();
   const allViolations: SafetyViolation[] = [];
 
-  // 1. Global Head Nurses
+  // 1. Coverage Nurses (global, not ward-bound)
   const headNurses = nurses.filter((n) => isGlobalHead(n.role));
   scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out, periodOffset);
   headNurses.forEach((n) => scheduled.add(n.id));

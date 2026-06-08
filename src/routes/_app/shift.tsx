@@ -111,7 +111,7 @@ function ShiftPage() {
   const qc = useQueryClient();
   const today = todayYmd();
   const [now, setNow] = useState(new Date());
-  const autoEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoEndingRef = useRef(false);
   const [lateDialog, setLateDialog] = useState<{
     open: boolean;
     reason: string;
@@ -209,27 +209,15 @@ function ShiftPage() {
 
   const currentPeriodHours = currentPeriodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
 
-  // ── Auto-end active shift at expected_end_at ─────────────────────────────
+  // ── Auto-end: check every minute whether the shift's expected end has passed ──
   useEffect(() => {
-    if (!shiftLog || shiftLog.ended_at) return;
-
+    if (!shiftLog || shiftLog.ended_at || autoEndingRef.current) return;
     const expectedEnd = new Date(shiftLog.expected_end_at);
-    const msLeft = expectedEnd.getTime() - Date.now();
-
-    if (msLeft <= 0) {
-      void endShift(shiftLog, true);
-      return;
-    }
-
-    autoEndRef.current = setTimeout(() => {
-      void endShift(shiftLog, true);
-    }, msLeft);
-
-    return () => {
-      if (autoEndRef.current) clearTimeout(autoEndRef.current);
-    };
+    if (now < expectedEnd) return;
+    autoEndingRef.current = true;
+    void endShift(shiftLog, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shiftLog?.id]);
+  }, [now]);
 
   // Management roles see all nurses' shift hours; regular nurses see personal tracker.
   if (activeRole && activeRole !== "nurse") {
@@ -284,8 +272,6 @@ function ShiftPage() {
   }
 
   async function endShift(log: ShiftLog, isAuto = false) {
-    if (autoEndRef.current) clearTimeout(autoEndRef.current);
-
     const endedAt = isAuto ? new Date(log.expected_end_at) : new Date();
     const hours = hoursLogged(log.started_at, endedAt.toISOString());
 

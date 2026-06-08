@@ -158,7 +158,9 @@ function ApprovalsPage() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
-  // exportScope keyed by window startDate: "" = all, "__HEAD__" = head nurses, ward name = that ward
+  // export selection keyed by window startDate
+  const [exportFacility, setExportFacility] = useState<Record<string, string>>({});
+  // exportScope: "" = all staff, "__HEAD__" = coverage nurses, ward name = that ward
   const [exportScope, setExportScope] = useState<Record<string, string>>({});
 
   const canApproveChief = hasAnyRole(["admin", "chief_matron"]);
@@ -170,11 +172,13 @@ function ApprovalsPage() {
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses-approvals"],
     queryFn: async () =>
-      ((await supabase.from("nurses").select("id, name, role, ward").order("name")).data ?? []) as {
+      ((await supabase.from("nurses").select("id, name, role, ward, facility").order("name"))
+        .data ?? []) as {
         id: string;
         name: string;
         role: string;
         ward: string | null;
+        facility: string | null;
       }[],
   });
 
@@ -249,7 +253,9 @@ function ApprovalsPage() {
           : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
       target: `${win.startDate} → ${win.endDate}`,
     });
-    toast.success(nextStatus === "published" ? "Rota published!" : "Approved — moving to next step");
+    toast.success(
+      nextStatus === "published" ? "Rota published!" : "Approved — moving to next step",
+    );
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
@@ -303,16 +309,27 @@ function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  // Fetch published rota data for a window, optionally filtered by scope.
-  // scope = "" → all staff  |  "__HEAD__" → head nurses only  |  ward name → that ward + its interns
-  async function fetchWindowData(win: RotaWindow, scope = "") {
+  // Fetch published rota data for a window, filtered by facility then scope.
+  // facility = "" → all facilities  |  any string → that facility only
+  // scope    = "" → all staff       |  "__HEAD__" → coverage nurses  |  ward name → that ward
+  async function fetchWindowData(win: RotaWindow, facility = "", scope = "") {
     const endDate = scheduleEndDate(win.startDate);
 
-    // Pre-filter to only the nurses we actually need for this export scope.
-    // Querying all nurses and discarding most rows is what caused the silent
-    // 1000-row PostgREST truncation (blank dates for the last ~9 days).
-    type NurseRow = { id: string; name: string; role: string; ward: string | null };
+    type NurseRow = {
+      id: string;
+      name: string;
+      role: string;
+      ward: string | null;
+      facility: string | null;
+    };
     let scopedNurses: NurseRow[] = allNurses as NurseRow[];
+
+    // Step 1 — filter by facility
+    if (facility) {
+      scopedNurses = scopedNurses.filter((n) => n.facility === facility);
+    }
+
+    // Step 2 — filter by scope within the facility
     if (scope === "__HEAD__") {
       scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role));
     } else if (scope) {
@@ -335,9 +352,7 @@ function ApprovalsPage() {
         .eq("status", "published")
         .in("nurse_id", nurseIds.slice(i, i + BATCH));
       if (data)
-        allAssignments.push(
-          ...(data as { nurse_id: string; shift_date: string; shift: string }[]),
-        );
+        allAssignments.push(...(data as { nurse_id: string; shift_date: string; shift: string }[]));
     }
 
     const assignMap = new Map<string, string>();
@@ -351,19 +366,20 @@ function ApprovalsPage() {
   }
 
   async function handleDownloadExcel(win: RotaWindow) {
+    const facility = exportFacility[win.startDate] ?? "";
     const scope = exportScope[win.startDate] ?? "";
     setDownloading(win.startDate + "-xlsx");
     try {
       const [XLSX, { activeNurses, assignMap }] = await Promise.all([
         import("xlsx"),
-        fetchWindowData(win, scope),
+        fetchWindowData(win, facility, scope),
       ]);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
 
-      const scopeLabel =
-        scope === "__HEAD__" ? " — Head Nurses" : scope ? ` — ${scope}` : "";
-      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${scopeLabel}`;
+      const facilityLabel = facility ? ` · ${facility}` : "";
+      const scopeLabel = scope === "__HEAD__" ? " — Coverage Nurses" : scope ? ` — ${scope}` : "";
+      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${scopeLabel}`;
 
       const headers = [
         "Nurse",
@@ -387,8 +403,17 @@ function ApprovalsPage() {
       const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
       ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
       XLSX.utils.book_append_sheet(wb, ws, "Rota");
-      const fileSuffix = scope === "__HEAD__" ? "-head-nurses" : scope ? `-${scope.replace(/\s+/g, "-").toLowerCase()}` : "";
-      XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}${fileSuffix}.xlsx`);
+      const facilitySlug = facility ? `-${facility.replace(/\s+/g, "-").toLowerCase()}` : "";
+      const fileSuffix =
+        scope === "__HEAD__"
+          ? "-coverage-nurses"
+          : scope
+            ? `-${scope.replace(/\s+/g, "-").toLowerCase()}`
+            : "";
+      XLSX.writeFile(
+        wb,
+        `rota-${win.startDate}-to-${win.endDate}${facilitySlug}${fileSuffix}.xlsx`,
+      );
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
@@ -397,10 +422,11 @@ function ApprovalsPage() {
   }
 
   async function handleDownloadPdf(win: RotaWindow) {
+    const facility = exportFacility[win.startDate] ?? "";
     const scope = exportScope[win.startDate] ?? "";
     setDownloading(win.startDate + "-pdf");
     try {
-      const { activeNurses, assignMap } = await fetchWindowData(win, scope);
+      const { activeNurses, assignMap } = await fetchWindowData(win, facility, scope);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
 
@@ -430,13 +456,15 @@ function ApprovalsPage() {
         })
         .join("");
 
+      const pdfFacilityLabel = facility ? ` · ${facility}` : "";
       const pdfScopeLabel =
-        scope === "__HEAD__" ? " — Head Nurses" : scope ? ` — ${scope}` : "";
+        scope === "__HEAD__" ? " — Coverage Nurses" : scope ? ` — ${scope}` : "";
+      const pdfFullLabel = `${pdfFacilityLabel}${pdfScopeLabel}`;
 
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${endDate}${pdfScopeLabel}</title>
+<title>Nurse Rota ${win.startDate} — ${endDate}${pdfFullLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
@@ -451,7 +479,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 .lb{display:inline-block;width:10px;height:10px;border:1px solid #aaa;margin-right:2px;vertical-align:middle}
 @media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
-<h1>Nurse Rota${pdfScopeLabel}</h1>
+<h1>Nurse Rota${pdfFullLabel}</h1>
 <p>${fmtDate(win.startDate)} — ${fmtDate(endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
 <table>
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
@@ -580,11 +608,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                                     : "bg-muted border-border text-muted-foreground",
                               )}
                             >
-                              {done ? (
-                                <CheckCircle2 className="h-4 w-4" />
-                              ) : (
-                                <span>{idx + 1}</span>
-                              )}
+                              {done ? <CheckCircle2 className="h-4 w-4" /> : <span>{idx + 1}</span>}
                             </div>
                             <span
                               className={cn(
@@ -657,79 +681,121 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     )}
 
                     {/* Published: revert (admin only) + downloads */}
-                    {win.status === "published" && (() => {
-                      // Derive ward list + head nurse presence for this window
-                      const winNurseIds = new Set(
-                        rows
-                          .filter((r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate)
-                          .map((r) => r.nurse_id),
-                      );
-                      const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
-                      const hasHeads = winNurses.some((n) => isGlobalHead(n.role));
-                      const wardNames = [
-                        ...new Set(
-                          winNurses
-                            .filter((n) => !isGlobalHead(n.role))
-                            .map((n) => parseWards(n.ward)[0])
-                            .filter((w): w is string => !!w),
-                        ),
-                      ].sort();
-                      const currentScope = exportScope[win.startDate] ?? "";
-                      return (
-                        <>
-                          {canRevertPublished && (
+                    {win.status === "published" &&
+                      (() => {
+                        // Derive the set of nurses in this window
+                        const winNurseIds = new Set(
+                          rows
+                            .filter(
+                              (r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate,
+                            )
+                            .map((r) => r.nurse_id),
+                        );
+                        const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
+
+                        // Facility list for this window
+                        const facilityNames = [
+                          ...new Set(
+                            winNurses.map((n) => n.facility).filter((f): f is string => !!f),
+                          ),
+                        ].sort();
+
+                        const currentFacility = exportFacility[win.startDate] ?? "";
+                        const currentScope = exportScope[win.startDate] ?? "";
+
+                        // Nurses restricted to the selected facility (or all if none selected)
+                        const facilityNurses = currentFacility
+                          ? winNurses.filter((n) => n.facility === currentFacility)
+                          : winNurses;
+
+                        const hasHeads = facilityNurses.some((n) => isGlobalHead(n.role));
+                        const wardNames = [
+                          ...new Set(
+                            facilityNurses
+                              .filter((n) => !isGlobalHead(n.role))
+                              .map((n) => parseWards(n.ward)[0])
+                              .filter((w): w is string => !!w),
+                          ),
+                        ].sort();
+                        return (
+                          <>
+                            {canRevertPublished && (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => revertPublished(win)}
+                                className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                                title="Admin only — returns schedule to Draft (data unchanged)"
+                              >
+                                <Undo2 className="h-3.5 w-3.5" /> Unpublish to Draft
+                              </button>
+                            )}
+
+                            {/* Step 1: facility selector */}
+                            {facilityNames.length > 1 && (
+                              <select
+                                title="Export facility"
+                                value={currentFacility}
+                                onChange={(e) => {
+                                  setExportFacility((prev) => ({
+                                    ...prev,
+                                    [win.startDate]: e.target.value,
+                                  }));
+                                  // Reset scope whenever facility changes
+                                  setExportScope((prev) => ({ ...prev, [win.startDate]: "" }));
+                                }}
+                                className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
+                              >
+                                <option value="">All Facilities</option>
+                                {facilityNames.map((f) => (
+                                  <option key={f} value={f}>
+                                    {f}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+
+                            {/* Step 2: ward / scope selector */}
+                            <select
+                              title="Export scope"
+                              value={currentScope}
+                              onChange={(e) =>
+                                setExportScope((prev) => ({
+                                  ...prev,
+                                  [win.startDate]: e.target.value,
+                                }))
+                              }
+                              className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
+                            >
+                              <option value="">All Staff</option>
+                              {hasHeads && <option value="__HEAD__">Coverage Nurses</option>}
+                              {wardNames.map((w) => (
+                                <option key={w} value={w}>
+                                  {w}
+                                </option>
+                              ))}
+                            </select>
                             <button
                               type="button"
-                              disabled={isBusy}
-                              onClick={() => revertPublished(win)}
-                              className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
-                              title="Admin only — returns schedule to Draft (data unchanged)"
+                              disabled={!!isDownloading}
+                              onClick={() => handleDownloadExcel(win)}
+                              className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
                             >
-                              <Undo2 className="h-3.5 w-3.5" /> Unpublish to Draft
+                              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                              {downloading === win.startDate + "-xlsx" ? "Generating…" : "Excel"}
                             </button>
-                          )}
-
-                          {/* Export scope selector */}
-                          <select
-                            title="Export scope"
-                            value={currentScope}
-                            onChange={(e) =>
-                              setExportScope((prev) => ({
-                                ...prev,
-                                [win.startDate]: e.target.value,
-                              }))
-                            }
-                            className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
-                          >
-                            <option value="">All Staff</option>
-                            {hasHeads && <option value="__HEAD__">Head Nurses</option>}
-                            {wardNames.map((w) => (
-                              <option key={w} value={w}>
-                                {w}
-                              </option>
-                            ))}
-                          </select>
-                        <button
-                          type="button"
-                          disabled={!!isDownloading}
-                          onClick={() => handleDownloadExcel(win)}
-                          className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                        >
-                          <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                          {downloading === win.startDate + "-xlsx" ? "Generating…" : "Excel"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!!isDownloading}
-                          onClick={() => handleDownloadPdf(win)}
-                          className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                        >
-                          <FileDown className="h-3.5 w-3.5 text-red-500" />
-                          {downloading === win.startDate + "-pdf" ? "Generating…" : "PDF"}
-                        </button>
-                      </>
-                    );
-                    })()}
+                            <button
+                              type="button"
+                              disabled={!!isDownloading}
+                              onClick={() => handleDownloadPdf(win)}
+                              className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                            >
+                              <FileDown className="h-3.5 w-3.5 text-red-500" />
+                              {downloading === win.startDate + "-pdf" ? "Generating…" : "PDF"}
+                            </button>
+                          </>
+                        );
+                      })()}
                   </div>
                 )}
               </div>
