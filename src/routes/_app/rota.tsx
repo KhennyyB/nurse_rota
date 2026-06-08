@@ -302,6 +302,13 @@ function RotaPage() {
 
   const extraShiftIds = useMemo(() => new Set(extraShifts.map((e) => e.nurseId)), [extraShifts]);
 
+  // True once any intern has been scheduled for this period (first ward run done).
+  // Used to lock the rotate-interns checkbox and protect intern assignments in Clear.
+  const internsAreScheduled = useMemo(() => {
+    const internIds = new Set(nurses.filter((n) => isInternType(n.role)).map((n) => n.id));
+    return assignments.some((a) => internIds.has(a.nurse_id));
+  }, [assignments, nurses]);
+
   // Unique role values derived from the loaded nurses list (for the role filter dropdown).
   const availableRoles = useMemo(
     () => [...new Set(nurses.map((n) => n.role).filter(Boolean))].sort(),
@@ -716,9 +723,13 @@ function RotaPage() {
   async function handleClear() {
     if (!confirm("Clear the draft for this 28-day window? Published shifts will be kept.")) return;
     setBusy(true);
-    // Clear only the currently filtered nurses so that clearing IP Ward
-    // does not also delete ICU, NICU, etc. assignments in the same period.
-    const ids = filteredNurses.map((n) => n.id);
+    // Clear only ward nurses for the current filter.
+    // Interns are excluded (same protection coverage nurses get from the ward filter)
+    // so that clearing one ward does not wipe intern schedules that are shared across
+    // the first-run and locked in for the whole period.
+    const ids = filteredNurses
+      .filter((n) => !isInternType(n.role) && !isGlobalHead(n.role))
+      .map((n) => n.id);
     const BATCH = 200;
     for (let i = 0; i < ids.length; i += BATCH) {
       const { error } = await supabase
@@ -1299,17 +1310,25 @@ function RotaPage() {
             </div>
 
             {/* Rotate interns */}
-            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+            <label
+              className={cn(
+                "flex items-start gap-2.5 select-none",
+                internsAreScheduled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+              )}
+            >
               <input
                 type="checkbox"
                 checked={genForm.rotateInterns}
+                disabled={internsAreScheduled}
                 onChange={(e) => setGenForm((f) => ({ ...f, rotateInterns: e.target.checked }))}
-                className="mt-0.5 h-4 w-4 rounded border accent-primary"
+                className="mt-0.5 h-4 w-4 rounded border accent-primary disabled:cursor-not-allowed"
               />
               <span className="text-sm">
                 <span className="font-medium">Rotate intern departments</span>
                 <span className="block text-xs text-muted-foreground mt-0.5">
-                  Automatically move each intern to their next assigned ward for this 28-day cycle.
+                  {internsAreScheduled
+                    ? "Intern schedule is locked in from the first run of this period — rotation is applied on the next period."
+                    : "Automatically move each intern to their next assigned ward for this 28-day cycle."}
                 </span>
               </span>
             </label>
