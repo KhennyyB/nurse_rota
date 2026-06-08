@@ -625,10 +625,13 @@ export function generateSchedule(opts: {
   scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out, periodOffset);
   headNurses.forEach((n) => scheduled.add(n.id));
 
-  // 2. Intern Nurses — grouped by ward, phases staggered across wards so
-  //    different wards don't share the same off-days.
-  //    Each intern in a ward is scheduled individually with the SAME phase so
-  //    all interns in that ward share an identical M/N/OFF pattern → equal shift counts.
+  // 2. Intern Nurses — grouped by assigned ward so interns in the same ward share
+  //    an identical phase (equal M/N/OFF counts).  Phases are staggered across
+  //    ward-groups so different wards don't all share the same off-days.
+  //    Assignments are stored with ward = null (same as Coverage Nurses) so that
+  //    interns are bundled into the Coverage Nurses approval card and published
+  //    together with coverage nurses, independently of any specific ward's
+  //    approval timeline.
   const interns = nurses.filter((n) => isInternType(n.role));
   const internsByWard = new Map<string | null, NurseInput[]>();
   for (const intern of interns) {
@@ -640,11 +643,9 @@ export function generateSchedule(opts: {
   const internGroupList = [...internsByWard.entries()];
   const numInternGroups = internGroupList.length;
   for (let gi = 0; gi < numInternGroups; gi++) {
-    const [ward, group] = internGroupList[gi];
+    const [, group] = internGroupList[gi];
     const stagger =
       numInternGroups > 1 ? Math.round((gi * NURSE_CYCLE.length) / numInternGroups) : 0;
-    // Schedule each intern as a solo group (N=1) with the ward's shared phase
-    // so computeShift always picks the same cycle position for every intern in this ward.
     for (const intern of group) {
       scheduleGroup(
         [intern],
@@ -652,7 +653,7 @@ export function generateSchedule(opts: {
         days,
         opts.startDate,
         leave,
-        ward,
+        null, // ward = null → bundled with Coverage Nurses card
         out,
         periodOffset + stagger,
       );
