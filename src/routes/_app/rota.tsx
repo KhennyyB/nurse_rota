@@ -615,58 +615,61 @@ function RotaPage() {
       }
 
       // Gap-fill: give every facility nurse a row for each day.
-      // Catches nurses added after the last full-facility run or missed by ward-specific runs.
-      // Only inserts for nurse+date pairs that have no existing row (never overwrites).
-      const coveredIds = new Set(scheduledIds);
-      const uncoveredNurses = facilityNurses.filter((n) => !coveredIds.has(n.id));
-      if (uncoveredNurses.length > 0) {
-        const uncoveredIds = uncoveredNurses.map((n) => n.id);
-        const { data: existingRows } = await supabase
-          .from("shift_assignments")
-          .select("nurse_id, shift_date")
-          .gte("shift_date", ymd(genStart))
-          .lte("shift_date", ymd(genEnd))
-          .in("nurse_id", uncoveredIds);
-        const existingKeys = new Set(
-          (existingRows ?? []).map(
-            (r: { nurse_id: string; shift_date: string }) => `${r.nurse_id}|${r.shift_date}`,
-          ),
-        );
-        const gapRows: {
-          nurse_id: string;
-          ward: string | null;
-          shift_date: string;
-          shift: "OFF" | "LEAVE";
-          status: "draft";
-          created_by: string | null;
-        }[] = [];
-        for (const nurse of uncoveredNurses) {
-          for (let d = 0; d < DAYS; d++) {
-            const dt = new Date(genStart);
-            dt.setDate(dt.getDate() + d);
-            const ds = ymd(dt);
-            if (existingKeys.has(`${nurse.id}|${ds}`)) continue;
-            const onLeave = leave.some(
-              (l) =>
-                l.nurse_id === nurse.id &&
-                l.status === "Approved" &&
-                l.from_date <= ds &&
-                l.to_date >= ds,
-            );
-            gapRows.push({
-              nurse_id: nurse.id,
-              ward: nurse.ward,
-              shift_date: ds,
-              shift: onLeave ? "LEAVE" : "OFF",
-              status: "draft",
-              created_by: user?.id ?? null,
-            });
-          }
-        }
-        for (let i = 0; i < gapRows.length; i += 500) {
-          await supabase
+      // Only runs for full-facility runs — ward-specific runs intentionally leave
+      // other wards' nurses without rows so they display as "—" in the grid and
+      // are not pulled into this ward's approval window.
+      if (!isWardRun) {
+        const coveredIds = new Set(scheduledIds);
+        const uncoveredNurses = facilityNurses.filter((n) => !coveredIds.has(n.id));
+        if (uncoveredNurses.length > 0) {
+          const uncoveredIds = uncoveredNurses.map((n) => n.id);
+          const { data: existingRows } = await supabase
             .from("shift_assignments")
-            .upsert(gapRows.slice(i, i + 500), { onConflict: "nurse_id,shift_date" });
+            .select("nurse_id, shift_date")
+            .gte("shift_date", ymd(genStart))
+            .lte("shift_date", ymd(genEnd))
+            .in("nurse_id", uncoveredIds);
+          const existingKeys = new Set(
+            (existingRows ?? []).map(
+              (r: { nurse_id: string; shift_date: string }) => `${r.nurse_id}|${r.shift_date}`,
+            ),
+          );
+          const gapRows: {
+            nurse_id: string;
+            ward: string | null;
+            shift_date: string;
+            shift: "OFF" | "LEAVE";
+            status: "draft";
+            created_by: string | null;
+          }[] = [];
+          for (const nurse of uncoveredNurses) {
+            for (let d = 0; d < DAYS; d++) {
+              const dt = new Date(genStart);
+              dt.setDate(dt.getDate() + d);
+              const ds = ymd(dt);
+              if (existingKeys.has(`${nurse.id}|${ds}`)) continue;
+              const onLeave = leave.some(
+                (l) =>
+                  l.nurse_id === nurse.id &&
+                  l.status === "Approved" &&
+                  l.from_date <= ds &&
+                  l.to_date >= ds,
+              );
+              gapRows.push({
+                nurse_id: nurse.id,
+                ward: nurse.ward,
+                shift_date: ds,
+                shift: onLeave ? "LEAVE" : "OFF",
+                status: "draft",
+                created_by: user?.id ?? null,
+              });
+            }
+          }
+          for (let i = 0; i < gapRows.length; i += 500) {
+            await supabase
+              .from("shift_assignments")
+              .upsert(gapRows.slice(i, i + 500), { onConflict: "nurse_id,shift_date" });
+          }
         }
       }
 
@@ -693,14 +696,24 @@ function RotaPage() {
   async function handleClear() {
     if (!confirm("Clear the draft for this 28-day window? Published shifts will be kept.")) return;
     setBusy(true);
-    const { error } = await supabase
-      .from("shift_assignments")
-      .delete()
-      .gte("shift_date", ymd(startDate))
-      .lte("shift_date", ymd(endDate))
-      .neq("status", "published");
+    // Clear only the currently filtered nurses so that clearing IP Ward
+    // does not also delete ICU, NICU, etc. assignments in the same period.
+    const ids = filteredNurses.map((n) => n.id);
+    const BATCH = 200;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const { error } = await supabase
+        .from("shift_assignments")
+        .delete()
+        .gte("shift_date", ymd(startDate))
+        .lte("shift_date", ymd(endDate))
+        .neq("status", "published")
+        .in("nurse_id", ids.slice(i, i + BATCH));
+      if (error) {
+        setBusy(false);
+        return toast.error(error.message);
+      }
+    }
     setBusy(false);
-    if (error) return toast.error(error.message);
     toast.success("Draft cleared");
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
