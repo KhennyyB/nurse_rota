@@ -525,11 +525,36 @@ td.sm{text-align:left;color:#444;min-width:55px}
           {windows.map((win) => {
             const isBusy = busy === win.startDate;
             const isDownloading = downloading?.startsWith(win.startDate);
-            // For published: treat all steps as done by using STEPS.length as the index
             const stepIndex =
               win.status === "published"
                 ? STEPS.length
                 : STEPS.findIndex((s) => s.status === win.status);
+
+            // ── Facility / ward info (used in header + export) ────────────
+            const winNurseIds = new Set(
+              rows
+                .filter((r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate)
+                .map((r) => r.nurse_id),
+            );
+            const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
+            const winFacilities = [
+              ...new Set(winNurses.map((n) => n.facility).filter((f): f is string => !!f)),
+            ].sort();
+
+            const currentFacility = exportFacility[win.startDate] ?? "";
+            const currentScope = exportScope[win.startDate] ?? "";
+            const exportNurses = currentFacility
+              ? winNurses.filter((n) => n.facility === currentFacility)
+              : winNurses;
+            const hasHeads = exportNurses.some((n) => isGlobalHead(n.role));
+            const exportWards = [
+              ...new Set(
+                exportNurses
+                  .filter((n) => !isGlobalHead(n.role))
+                  .map((n) => parseWards(n.ward)[0])
+                  .filter((w): w is string => !!w),
+              ),
+            ].sort();
 
             let canApprove = false;
             let nextStatus: AssignmentStatus = "draft";
@@ -565,17 +590,43 @@ td.sm{text-align:left;color:#444;min-width:55px}
               <div key={win.startDate} className="rounded-xl border bg-card overflow-hidden">
                 {/* Header */}
                 <div className="px-5 py-4 border-b flex flex-wrap items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold">
                       {fmtDate(win.startDate)} → {fmtDate(win.endDate)}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {win.nurseCount} nurses · {win.assignmentCount} assignments
                     </p>
+                    {/* Facility → ward summary */}
+                    {winFacilities.length > 0 && (
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1.5">
+                        {winFacilities.map((f) => {
+                          const fWards = [
+                            ...new Set(
+                              winNurses
+                                .filter((n) => n.facility === f && !isGlobalHead(n.role))
+                                .map((n) => parseWards(n.ward)[0])
+                                .filter((w): w is string => !!w),
+                            ),
+                          ].sort();
+                          return (
+                            <p key={f} className="text-xs">
+                              <span className="font-medium text-foreground">{f}</span>
+                              {fWards.length > 0 && (
+                                <span className="text-muted-foreground">
+                                  {" "}
+                                  · {fWards.join(", ")}
+                                </span>
+                              )}
+                            </p>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <span
                     className={cn(
-                      "inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border",
+                      "inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border shrink-0",
                       STATUS_COLORS[win.status],
                     )}
                   >
@@ -680,84 +731,52 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       </button>
                     )}
 
-                    {/* Published: revert (admin only) + downloads */}
-                    {win.status === "published" &&
-                      (() => {
-                        // Derive the set of nurses in this window
-                        const winNurseIds = new Set(
-                          rows
-                            .filter(
-                              (r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate,
-                            )
-                            .map((r) => r.nurse_id),
-                        );
-                        const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
+                    {/* Published: revert (admin only) + export controls */}
+                    {win.status === "published" && (
+                      <>
+                        {canRevertPublished && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => revertPublished(win)}
+                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                            title="Admin only — returns schedule to Draft (data unchanged)"
+                          >
+                            <Undo2 className="h-3.5 w-3.5" /> Unpublish to Draft
+                          </button>
+                        )}
 
-                        // Facility list for this window
-                        const facilityNames = [
-                          ...new Set(
-                            winNurses.map((n) => n.facility).filter((f): f is string => !!f),
-                          ),
-                        ].sort();
-
-                        const currentFacility = exportFacility[win.startDate] ?? "";
-                        const currentScope = exportScope[win.startDate] ?? "";
-
-                        // Nurses restricted to the selected facility (or all if none selected)
-                        const facilityNurses = currentFacility
-                          ? winNurses.filter((n) => n.facility === currentFacility)
-                          : winNurses;
-
-                        const hasHeads = facilityNurses.some((n) => isGlobalHead(n.role));
-                        const wardNames = [
-                          ...new Set(
-                            facilityNurses
-                              .filter((n) => !isGlobalHead(n.role))
-                              .map((n) => parseWards(n.ward)[0])
-                              .filter((w): w is string => !!w),
-                          ),
-                        ].sort();
-                        return (
-                          <>
-                            {canRevertPublished && (
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => revertPublished(win)}
-                                className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
-                                title="Admin only — returns schedule to Draft (data unchanged)"
-                              >
-                                <Undo2 className="h-3.5 w-3.5" /> Unpublish to Draft
-                              </button>
-                            )}
-
-                            {/* Step 1: facility selector */}
-                            {facilityNames.length > 1 && (
+                        {/* Export: Facility → Ward → download buttons */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {winFacilities.length > 1 && (
+                            <label className="flex items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground font-medium">
+                                Facility:
+                              </span>
                               <select
-                                title="Export facility"
                                 value={currentFacility}
                                 onChange={(e) => {
                                   setExportFacility((prev) => ({
                                     ...prev,
                                     [win.startDate]: e.target.value,
                                   }));
-                                  // Reset scope whenever facility changes
                                   setExportScope((prev) => ({ ...prev, [win.startDate]: "" }));
                                 }}
                                 className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
                               >
-                                <option value="">All Facilities</option>
-                                {facilityNames.map((f) => (
+                                <option value="">All</option>
+                                {winFacilities.map((f) => (
                                   <option key={f} value={f}>
                                     {f}
                                   </option>
                                 ))}
                               </select>
-                            )}
+                            </label>
+                          )}
 
-                            {/* Step 2: ward / scope selector */}
+                          <label className="flex items-center gap-1.5">
+                            <span className="text-xs text-muted-foreground font-medium">Ward:</span>
                             <select
-                              title="Export scope"
                               value={currentScope}
                               onChange={(e) =>
                                 setExportScope((prev) => ({
@@ -769,33 +788,35 @@ td.sm{text-align:left;color:#444;min-width:55px}
                             >
                               <option value="">All Staff</option>
                               {hasHeads && <option value="__HEAD__">Coverage Nurses</option>}
-                              {wardNames.map((w) => (
+                              {exportWards.map((w) => (
                                 <option key={w} value={w}>
                                   {w}
                                 </option>
                               ))}
                             </select>
-                            <button
-                              type="button"
-                              disabled={!!isDownloading}
-                              onClick={() => handleDownloadExcel(win)}
-                              className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                            >
-                              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                              {downloading === win.startDate + "-xlsx" ? "Generating…" : "Excel"}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={!!isDownloading}
-                              onClick={() => handleDownloadPdf(win)}
-                              className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                            >
-                              <FileDown className="h-3.5 w-3.5 text-red-500" />
-                              {downloading === win.startDate + "-pdf" ? "Generating…" : "PDF"}
-                            </button>
-                          </>
-                        );
-                      })()}
+                          </label>
+
+                          <button
+                            type="button"
+                            disabled={!!isDownloading}
+                            onClick={() => handleDownloadExcel(win)}
+                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                          >
+                            <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                            {downloading === win.startDate + "-xlsx" ? "Generating…" : "Excel"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!!isDownloading}
+                            onClick={() => handleDownloadPdf(win)}
+                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                          >
+                            <FileDown className="h-3.5 w-3.5 text-red-500" />
+                            {downloading === win.startDate + "-pdf" ? "Generating…" : "PDF"}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

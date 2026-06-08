@@ -1,7 +1,7 @@
 // Auto-scheduling engine for the 28-day rota.
 //
 // Nurse/NA cycle (12-day): M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF  (3M, 3N, 6OFF)
-// Coverage Nurse cycle (7-day): M→N→OFF→M→N→OFF→M  (3M, 2N, 2OFF; 5 working days)
+// Coverage Nurse cycle (7-day): M→M→M→N→N→OFF→OFF  (3M, 2N, 2 consecutive OFF days)
 // Ward Supervisor cycle (4-day): M→M→M→OFF  (mornings only, non-Ikoyi)
 // Intern Nurses: NURSE_CYCLE, one per ward, phases staggered so off-days
 //   never fall on the same day across wards.
@@ -74,9 +74,10 @@ const NURSE_CYCLE: readonly ShiftCode[] = [
   "OFF",
 ];
 
-// 7-day cycle for Coverage Nurses: 3M + 2N + 2OFF, N always followed by OFF.
-// Pattern: M→N→OFF→M→N→OFF→M.
-const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "N", "OFF", "M", "N", "OFF", "M"];
+// 7-day cycle for Coverage Nurses: 3M + 2N + 2 consecutive OFF days.
+// Pattern: M→M→M→N→N→OFF→OFF. Nights always followed by rest (N→N ok, N→OFF ok).
+// Wraparound: OFF→M ✓ (rested day before fresh mornings).
+const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "N", "N", "OFF", "OFF"];
 
 // 4-day block cycle for ward supervisors (shift leaders): 3 mornings → 1 off.
 const SUPERVISOR_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "OFF"];
