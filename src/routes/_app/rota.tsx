@@ -43,6 +43,9 @@ import {
 } from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/_app/rota")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    myOnly: search.myOnly === true || search.myOnly === "true",
+  }),
   head: () => ({
     meta: [
       { title: "Rota — Nurses Rota" },
@@ -125,7 +128,9 @@ function summariseViolations(violations: SafetyViolation[]) {
 }
 
 function RotaPage() {
-  const { canManageStaff, hasAnyRole, user, nurseFacility, isAdmin } = useAuth();
+  const { canManageStaff, hasAnyRole, user, nurseFacility, isAdmin, nurseId, activeRole } =
+    useAuth();
+  const { myOnly } = Route.useSearch();
   const canEdit = canManageStaff;
   const canGenerate = hasAnyRole(["admin", "cno", "chief_matron"]);
   const qc = useQueryClient();
@@ -316,19 +321,37 @@ function RotaPage() {
   );
 
   // View: nurses filtered by toolbar selects + search
+  // For nurse role: derive which ward this user belongs to so we can lock the view.
+  const lockedWard =
+    activeRole === "nurse" && nurseId
+      ? (nurses.find((n) => n.id === nurseId)?.ward?.split("|")[0] ?? null)
+      : null;
+
   const filteredNurses = useMemo(() => {
     let list = nurses;
     if (selectedFacility) list = list.filter((n) => n.facility === selectedFacility);
-    // Head nurses cover all wards — always show them regardless of ward filter.
-    if (selectedWard)
-      list = list.filter((n) => isGlobalHead(n.role) || parseWards(n.ward).includes(selectedWard));
+    // Nurse role: always scope to their own ward. Otherwise use the ward dropdown.
+    const effectiveWard = lockedWard ?? selectedWard;
+    if (effectiveWard)
+      list = list.filter((n) => isGlobalHead(n.role) || parseWards(n.ward).includes(effectiveWard));
     if (selectedRole) list = list.filter((n) => n.role === selectedRole);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((n) => n.name.toLowerCase().includes(q));
     }
+    // myOnly: restrict to just the current user's own row
+    if (myOnly && nurseId) list = list.filter((n) => n.id === nurseId);
     return list;
-  }, [nurses, selectedFacility, selectedWard, selectedRole, searchQuery]);
+  }, [
+    nurses,
+    selectedFacility,
+    lockedWard,
+    selectedWard,
+    selectedRole,
+    searchQuery,
+    myOnly,
+    nurseId,
+  ]);
 
   // Generate dialog: wards that belong to nurses in the selected facility
   const genWards = useMemo(() => {
@@ -883,55 +906,65 @@ function RotaPage() {
           </select>
         )}
 
-        {/* Ward filter */}
-        <select
-          title="Ward"
-          value={selectedWard}
-          onChange={(e) => setSelectedWard(e.target.value)}
-          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">All Wards</option>
-          {wards.map((w) => (
-            <option key={w.name}>{w.name}</option>
-          ))}
-        </select>
+        {/* Ward filter — locked for nurse role */}
+        {lockedWard ? (
+          <span className="h-9 px-3 rounded-md border bg-muted text-sm flex items-center font-medium text-muted-foreground">
+            {lockedWard}
+          </span>
+        ) : (
+          <select
+            title="Ward"
+            value={selectedWard}
+            onChange={(e) => setSelectedWard(e.target.value)}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">All Wards</option>
+            {wards.map((w) => (
+              <option key={w.name}>{w.name}</option>
+            ))}
+          </select>
+        )}
 
-        {/* Role filter */}
-        <select
-          title="Role"
-          value={selectedRole}
-          onChange={(e) => setSelectedRole(e.target.value)}
-          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">All Roles</option>
-          {availableRoles.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
+        {/* Role filter — hidden for nurse role */}
+        {activeRole !== "nurse" && (
+          <select
+            title="Role"
+            value={selectedRole}
+            onChange={(e) => setSelectedRole(e.target.value)}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">All Roles</option>
+            {availableRoles.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        )}
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            type="search"
-            placeholder="Search nurse…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 pl-8 pr-7 w-44 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              aria-label="Clear search"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        {/* Search — hidden when viewing own schedule only */}
+        {!myOnly && activeRole !== "nurse" && (
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="search"
+              placeholder="Search nurse…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-9 pl-8 pr-7 w-44 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="flex-1" />
 
@@ -1034,6 +1067,14 @@ function RotaPage() {
       )}
 
       <Legend />
+
+      {/* Personal schedule banner */}
+      {myOnly && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border bg-primary/5 border-primary/20 text-sm text-primary font-medium mb-2">
+          <Lock className="h-4 w-4 shrink-0" />
+          Showing your schedule only
+        </div>
+      )}
 
       {/* Rota table */}
       {isLoading ? (

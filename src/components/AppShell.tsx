@@ -17,11 +17,13 @@ import {
   UserCog,
   LogIn,
   Timer,
+  LayoutGrid,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
 import { useAuth, ROLE_DESCRIPTIONS, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { supabase } from "@/integrations/supabase/client";
+import { loadMenuPermissions, getEffectiveRoles } from "@/lib/menu-permissions";
 
 const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
 const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
@@ -44,6 +46,7 @@ const nav = [
   { to: "/audit", label: "Audit Log", icon: ShieldCheck, roles: ["admin", "cno"] as AppRole[] },
   { to: "/users", label: "User Profiles", icon: UserCog, roles: ["admin"] as AppRole[] },
   { to: "/permissions", label: "Permissions", icon: KeyRound, roles: ["admin"] as AppRole[] },
+  { to: "/menu-permissions", label: "Menu Access", icon: LayoutGrid, roles: ["admin"] as AppRole[] },
 ] as const;
 
 export async function appBeforeLoad() {
@@ -57,6 +60,17 @@ export function AppShell() {
     useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [menuPermissions, setMenuPermissions] = useState(loadMenuPermissions);
+
+  useEffect(() => {
+    const handler = () => setMenuPermissions(loadMenuPermissions());
+    window.addEventListener("menu-permissions-changed", handler);
+    window.addEventListener("storage", handler);
+    return () => {
+      window.removeEventListener("menu-permissions-changed", handler);
+      window.removeEventListener("storage", handler);
+    };
+  }, []);
 
   useEffect(() => {
     setOpen(false);
@@ -77,9 +91,10 @@ export function AppShell() {
     );
   }
 
-  const visibleNav = nav.filter((n) =>
-    activeRole ? n.roles.includes(activeRole) : roles.length === 0,
-  );
+  const visibleNav = nav.filter((n) => {
+    const effectiveRoles = getEffectiveRoles(n.to, menuPermissions);
+    return activeRole ? effectiveRoles.includes(activeRole) : roles.length === 0;
+  });
   const primaryRole = activeRole ?? roles[0];
   const initials = (fullName ?? user?.email ?? "?")
     .split(/[\s@]/)

@@ -404,6 +404,7 @@ function NurseDashboard() {
             <h2 className="font-semibold">Next 7 days</h2>
             <Link
               to="/rota"
+              search={{ myOnly: true }}
               className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
             >
               View rota <ChevronRight className="h-3 w-3" />
