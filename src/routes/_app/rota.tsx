@@ -477,12 +477,11 @@ function RotaPage() {
     // giving a true round-robin rotation across 28-day periods.
     let internsToSchedule = facilityInterns;
     if (includeInterns && genForm.rotateInterns) {
-      const facilityWardNames = wards
-        .filter((w) => {
-          const wf = (w as WardInput & { facility?: string | null }).facility;
-          return !wf || wf === genForm.facility;
-        })
-        .map((w) => w.name);
+      // Use the same ward list as the generate dialog dropdown: wards that nurses
+      // in this facility are actually assigned to. This guarantees every ward
+      // (including IP Ward) is in the rotation pool and no cross-facility wards
+      // are accidentally included.
+      const facilityWardNames = genWards.map((w) => w.name);
 
       if (facilityWardNames.length > 0) {
         const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
@@ -500,7 +499,7 @@ function RotaPage() {
           const currentWard = parseWards(n.ward)[0] ?? null;
           const newWard = nextInternWard(
             currentWard,
-            wards.map((w) => w.name),
+            genWards.map((w) => w.name),
           );
           return { ...n, ward: newWard };
         });
