@@ -10,13 +10,15 @@ import {
   FileSpreadsheet,
   FileDown,
   Undo2,
+  Building2,
+  CalendarRange,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { isGlobalHead } from "@/lib/auto-schedule";
 
@@ -74,7 +76,6 @@ function dominantStatus(statuses: string[]): WindowStatus {
 function groupIntoWindows(rows: PendingRow[]): RotaWindow[] {
   if (!rows.length) return [];
 
-  // Group rows by ward first so each ward gets its own independent approval card.
   const byWard = new Map<string, PendingRow[]>();
   for (const row of rows) {
     const key = row.ward ?? "__NONE__";
@@ -91,7 +92,8 @@ function groupIntoWindows(rows: PendingRow[]): RotaWindow[] {
     for (let i = 1; i < sorted.length; i++) {
       const prev = cluster[cluster.length - 1];
       const diff = Math.round(
-        (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
+        (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) /
+          86400000,
       );
       if (diff > 14) {
         windows.push(makeWindow(cluster, ward));
@@ -102,9 +104,9 @@ function groupIntoWindows(rows: PendingRow[]): RotaWindow[] {
     if (cluster.length) windows.push(makeWindow(cluster, ward));
   }
 
-  // Sort newest first; within the same date range sort by ward name.
   return windows.sort(
-    (a, b) => b.startDate.localeCompare(a.startDate) || (a.ward ?? "").localeCompare(b.ward ?? ""),
+    (a, b) =>
+      b.startDate.localeCompare(a.startDate) || (a.ward ?? "").localeCompare(b.ward ?? ""),
   );
 }
 
@@ -120,8 +122,6 @@ function makeWindow(rows: PendingRow[], ward: string | null): RotaWindow {
   };
 }
 
-// Unique key for a window — combines date and ward so two wards with the
-// same start date remain distinct in busy/downloading/export state maps.
 function winKey(win: RotaWindow): string {
   return `${win.startDate}|${win.ward ?? ""}`;
 }
@@ -134,8 +134,6 @@ function fmtDate(d: string) {
   });
 }
 
-// Always return the canonical 28-day end from a schedule start date,
-// regardless of what the DB's max assignment date happens to be.
 function scheduleEndDate(startDate: string): string {
   const d = new Date(startDate + "T00:00:00");
   d.setDate(d.getDate() + 27);
@@ -180,12 +178,15 @@ function parseWards(ward: string | null): string[] {
 }
 
 function ApprovalsPage() {
-  const { hasAnyRole, user } = useAuth();
+  const { hasAnyRole, user, isAdmin, nurseFacility } = useAuth();
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
-  // Facility filter keyed by winKey — only used for Coverage Nurse cards that span facilities.
   const [exportFacility, setExportFacility] = useState<Record<string, string>>({});
+
+  // Non-admins are locked to their own facility.
+  const lockedFacility = !isAdmin && nurseFacility ? nurseFacility : null;
+  const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
   const canApproveChief = hasAnyRole(["admin", "chief_matron"]);
   const canApproveCNO = hasAnyRole(["admin", "cno"]);
@@ -206,7 +207,6 @@ function ApprovalsPage() {
       }[],
   });
 
-  // Fetch all assignment windows (all statuses, bounded to ±6 months for performance)
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["approvals"],
     queryFn: async () => {
@@ -219,10 +219,6 @@ function ApprovalsPage() {
         const day = String(d.getDate()).padStart(2, "0");
         return `${d.getFullYear()}-${m}-${day}`;
       };
-
-      // PostgREST default cap is 1000 rows — override so large facilities
-      // (200 nurses × ~6 periods × 28 days = ~33 600 rows) don't get silently
-      // truncated and produce missing windows.
       const { data, error } = await supabase
         .from("shift_assignments")
         .select("id, shift_date, status, nurse_id, ward, shift")
@@ -236,7 +232,87 @@ function ApprovalsPage() {
 
   const windows = groupIntoWindows(rows);
 
-  type AssignmentStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+  // Precompute per-window metadata once so it can drive both filtering and rendering.
+  const windowMeta = useMemo(() => {
+    return new Map(
+      windows.map((win) => {
+        const winRows = rows.filter(
+          (r) =>
+            r.shift_date >= win.startDate &&
+            r.shift_date <= win.endDate &&
+            (win.ward !== null ? r.ward === win.ward : r.ward === null),
+        );
+        const winNurseIds = new Set(winRows.map((r) => r.nurse_id));
+        const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
+        const winFacilities = [
+          ...new Set(winNurses.map((n) => n.facility).filter((f): f is string => !!f)),
+        ].sort();
+
+        // Nurses with above-baseline working shifts = enforcement added extra shifts.
+        const winShiftCounts = new Map<string, number>();
+        for (const r of winRows) {
+          if (r.shift === "M" || r.shift === "N")
+            winShiftCounts.set(r.nurse_id, (winShiftCounts.get(r.nurse_id) ?? 0) + 1);
+        }
+        const byRole = new Map<string, string[]>();
+        for (const n of winNurses) {
+          const g = byRole.get(n.role) ?? [];
+          g.push(n.id);
+          byRole.set(n.role, g);
+        }
+        const extraStaff: { name: string; extra: number }[] = [];
+        for (const ids of byRole.values()) {
+          const counts = ids.map((id) => winShiftCounts.get(id) ?? 0);
+          const baseline = Math.min(...counts);
+          for (const id of ids) {
+            const diff = (winShiftCounts.get(id) ?? 0) - baseline;
+            if (diff > 0) {
+              const nurse = winNurses.find((n) => n.id === id);
+              if (nurse) extraStaff.push({ name: nurse.name, extra: diff });
+            }
+          }
+        }
+
+        return [winKey(win), { winFacilities, extraStaff }] as const;
+      }),
+    );
+  }, [windows, rows, allNurses]);
+
+  // Facilities that have at least one window.
+  const availableFacilities = useMemo(() => {
+    const facs = new Set<string>();
+    for (const meta of windowMeta.values()) {
+      meta.winFacilities.forEach((f) => facs.add(f));
+    }
+    return [...facs].sort();
+  }, [windowMeta]);
+
+  // Auto-select first available facility when data loads (admin only — non-admins are locked).
+  const effectiveFacility =
+    selectedFacility ||
+    (lockedFacility ?? (availableFacilities.length > 0 ? availableFacilities[0] : ""));
+
+  // Windows that belong to the selected facility.
+  const facilityWindows = useMemo(() => {
+    if (!effectiveFacility) return windows;
+    return windows.filter((win) => {
+      const meta = windowMeta.get(winKey(win));
+      return meta?.winFacilities.includes(effectiveFacility) ?? false;
+    });
+  }, [windows, windowMeta, effectiveFacility]);
+
+  // Group filtered windows by period (startDate), newest period first.
+  const windowsByPeriod = useMemo(() => {
+    const map = new Map<string, RotaWindow[]>();
+    for (const win of facilityWindows) {
+      const arr = map.get(win.startDate) ?? [];
+      arr.push(win);
+      map.set(win.startDate, arr);
+    }
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  }, [facilityWindows]);
+
+  // ── DB actions ─────────────────────────────────────────────────────────────
 
   async function submitDraft(win: RotaWindow) {
     setBusy(winKey(win));
@@ -259,23 +335,17 @@ function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ["approvals"] });
   }
 
+  type AssignmentStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+
   async function advance(win: RotaWindow, nextStatus: AssignmentStatus) {
     setBusy(winKey(win));
-
-    // For every step except Publish: only promote rows at the exact current status
-    // so the approval chain is respected.
-    // For Publish: promote ALL non-published rows in the window so assignments that
-    // were added or regenerated after the window entered approval (still sitting at
-    // "draft" or an earlier approval step) are not left behind with a stale status
-    // that would prevent nurses from starting their shift.
-    const buildBase = (statusFilter: string) =>
+    const buildBase = (statusFilter: AssignmentStatus) =>
       supabase
         .from("shift_assignments")
         .update({ status: nextStatus })
         .gte("shift_date", win.startDate)
         .lte("shift_date", win.endDate)
         .neq("status", statusFilter);
-
     const buildExact = () =>
       supabase
         .from("shift_assignments")
@@ -283,7 +353,6 @@ function ApprovalsPage() {
         .gte("shift_date", win.startDate)
         .lte("shift_date", win.endDate)
         .eq("status", win.status);
-
     const base = nextStatus === "published" ? buildBase("published") : buildExact();
     const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
     setBusy(null);
@@ -355,27 +424,11 @@ function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  // Fetch published rota data for a window, filtered by facility then scope.
-  // facility = "" → all facilities  |  any string → that facility only
-  // scope    = "" → all staff       |  "__HEAD__" → coverage nurses  |  ward name → that ward
   async function fetchWindowData(win: RotaWindow, facility = "", scope = "") {
     const endDate = scheduleEndDate(win.startDate);
-
-    type NurseRow = {
-      id: string;
-      name: string;
-      role: string;
-      ward: string | null;
-      facility: string | null;
-    };
+    type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null };
     let scopedNurses: NurseRow[] = allNurses as NurseRow[];
-
-    // Step 1 — filter by facility
-    if (facility) {
-      scopedNurses = scopedNurses.filter((n) => n.facility === facility);
-    }
-
-    // Step 2 — filter by scope within the facility
+    if (facility) scopedNurses = scopedNurses.filter((n) => n.facility === facility);
     if (scope === "__HEAD__") {
       scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role));
     } else if (scope) {
@@ -383,9 +436,6 @@ function ApprovalsPage() {
         (n) => !isGlobalHead(n.role) && parseWards(n.ward)[0] === scope,
       );
     }
-
-    // Batch by nurse IDs (50 per request → max 50 × 28 = 1 400 rows per batch),
-    // same pattern as the rota grid. This is completely immune to row-cap issues.
     const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
     const nurseIds = scopedNurses.map((n) => n.id);
     const BATCH = 50;
@@ -398,23 +448,19 @@ function ApprovalsPage() {
         .eq("status", "published")
         .in("nurse_id", nurseIds.slice(i, i + BATCH));
       if (data)
-        allAssignments.push(...(data as { nurse_id: string; shift_date: string; shift: string }[]));
+        allAssignments.push(
+          ...(data as { nurse_id: string; shift_date: string; shift: string }[]),
+        );
     }
-
     const assignMap = new Map<string, string>();
     allAssignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date}`, a.shift));
-
-    // Only list nurses who have at least one published assignment in this window.
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
-
     return { activeNurses, assignMap };
   }
 
   async function handleDownloadExcel(win: RotaWindow) {
     const key = winKey(win);
-    // Ward-specific cards auto-scope to the card's ward.
-    // Coverage-nurse cards use the facility filter (if set) and scope to heads.
     const scope = win.ward !== null ? win.ward : "__HEAD__";
     const facility = win.ward !== null ? "" : (exportFacility[key] ?? "");
     setDownloading(key + "-xlsx");
@@ -425,11 +471,9 @@ function ApprovalsPage() {
       ]);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
-
       const facilityLabel = facility ? ` · ${facility}` : "";
       const scopeLabel = scope === "__HEAD__" ? " — Coverage Nurses" : scope ? ` — ${scope}` : "";
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${scopeLabel}`;
-
       const headers = [
         "Nurse",
         "Role",
@@ -439,16 +483,13 @@ function ApprovalsPage() {
           return `${dt.toLocaleDateString("en-GB", { weekday: "short" })} ${dt.getDate()}/${dt.getMonth() + 1}`;
         }),
       ];
-
       const rowData = activeNurses.map((n) => [
         n.name,
         n.role,
         n.ward ? n.ward.split("|")[0] : "",
         ...dates.map((d) => assignMap.get(`${n.id}|${d}`) ?? ""),
       ]);
-
       const wb = XLSX.utils.book_new();
-      // Title row, blank spacer row, then headers + data
       const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
       ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
       XLSX.utils.book_append_sheet(wb, ws, "Rota");
@@ -459,10 +500,7 @@ function ApprovalsPage() {
           : scope
             ? `-${scope.replace(/\s+/g, "-").toLowerCase()}`
             : "";
-      XLSX.writeFile(
-        wb,
-        `rota-${win.startDate}-to-${win.endDate}${facilitySlug}${fileSuffix}.xlsx`,
-      );
+      XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}${facilitySlug}${fileSuffix}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
@@ -479,21 +517,18 @@ function ApprovalsPage() {
       const { activeNurses, assignMap } = await fetchWindowData(win, facility, scope);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
-
       const shiftBg: Record<string, string> = {
         M: "#fef3c7",
         N: "#e0e7ff",
         OFF: "#f3f4f6",
         LEAVE: "#fee2e2",
       };
-
       const dateHeaders = dates
         .map((d) => {
           const dt = new Date(d + "T00:00:00");
           return `<th>${dt.toLocaleDateString("en-GB", { weekday: "short" })}<br/>${dt.getDate()}/${dt.getMonth() + 1}</th>`;
         })
         .join("");
-
       const bodyRows = activeNurses
         .map((n) => {
           const cells = dates
@@ -505,16 +540,13 @@ function ApprovalsPage() {
           return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
         })
         .join("");
-
       const pdfFacilityLabel = facility ? ` · ${facility}` : "";
       const pdfScopeLabel =
         scope === "__HEAD__" ? " — Coverage Nurses" : scope ? ` — ${scope}` : "";
-      const pdfFullLabel = `${pdfFacilityLabel}${pdfScopeLabel}`;
-
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${endDate}${pdfFullLabel}</title>
+<title>Nurse Rota ${win.startDate} — ${endDate}${pdfFacilityLabel}${pdfScopeLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
@@ -529,7 +561,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 .lb{display:inline-block;width:10px;height:10px;border:1px solid #aaa;margin-right:2px;vertical-align:middle}
 @media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
-<h1>Nurse Rota${pdfFullLabel}</h1>
+<h1>Nurse Rota${pdfFacilityLabel}${pdfScopeLabel}</h1>
 <p>${fmtDate(win.startDate)} — ${fmtDate(endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
 <table>
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
@@ -543,7 +575,6 @@ td.sm{text-align:left;color:#444;min-width:55px}
 </div>
 <script>window.onload=()=>{window.print()}</script>
 </body></html>`;
-
       const pw = window.open("", "_blank");
       if (!pw) {
         toast.error("Pop-up blocked — allow pop-ups to download the PDF");
@@ -558,8 +589,237 @@ td.sm{text-align:left;color:#444;min-width:55px}
     }
   }
 
+  // ── Render a single approval card ──────────────────────────────────────────
+  function renderCard(win: RotaWindow) {
+    const key = winKey(win);
+    const isBusy = busy === key;
+    const isDownloadingCard = downloading?.startsWith(key);
+    const stepIndex =
+      win.status === "published"
+        ? STEPS.length
+        : STEPS.findIndex((s) => s.status === win.status);
+
+    const meta = windowMeta.get(key);
+    const winFacilities = meta?.winFacilities ?? [];
+    const extraStaff = meta?.extraStaff ?? [];
+    const currentFacility = exportFacility[key] ?? "";
+
+    let canApprove = false;
+    let nextStatus: AssignmentStatus = "draft";
+    let approveLabel = "";
+    if (win.status === "submitted" && canApproveChief) {
+      canApprove = true;
+      nextStatus = "approved_chief";
+      approveLabel = "Approve (Chief Matron)";
+    } else if (win.status === "approved_chief" && canApproveCNO) {
+      canApprove = true;
+      nextStatus = "approved_cno";
+      approveLabel = "Approve (CNO)";
+    } else if (win.status === "approved_cno" && canPublish) {
+      canApprove = true;
+      nextStatus = "published";
+      approveLabel = "Publish Rota";
+    }
+
+    const canReject =
+      win.status !== "draft" &&
+      win.status !== "published" &&
+      ((win.status === "submitted" && canApproveChief) ||
+        (win.status === "approved_chief" && canApproveCNO) ||
+        (win.status === "approved_cno" && canPublish));
+
+    const showActions =
+      (win.status === "draft" && canSubmit) ||
+      canApprove ||
+      canReject ||
+      win.status === "published";
+
+    return (
+      <div key={key} className="rounded-xl border bg-card overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="px-4 py-3.5 border-b flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Coverage Nurses"}</p>
+            {win.ward === null && winFacilities.length > 0 && (
+              <p className="text-xs text-muted-foreground mt-0.5">{winFacilities.join(" · ")}</p>
+            )}
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {win.nurseCount} nurses · {win.assignmentCount} assignments
+            </p>
+            {extraStaff.length > 0 && (
+              <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
+                Extra shifts:{" "}
+                {extraStaff.map((e) => `${e.name} +${e.extra * 12} h`).join(", ")}
+              </p>
+            )}
+          </div>
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full border shrink-0",
+              STATUS_COLORS[win.status],
+            )}
+          >
+            {win.status === "published" ? (
+              <CheckCircle2 className="h-3 w-3" />
+            ) : (
+              <Clock className="h-3 w-3" />
+            )}
+            {STATUS_LABELS[win.status]}
+          </span>
+        </div>
+
+        {/* Step tracker */}
+        <div className="px-4 py-3">
+          <ol className="flex items-center gap-0">
+            {STEPS.map((step, idx) => {
+              const done = idx < stepIndex;
+              const active = idx === stepIndex;
+              const last = idx === STEPS.length - 1;
+              return (
+                <li key={step.key} className="flex items-center">
+                  <div className="flex flex-col items-center gap-1">
+                    <div
+                      className={cn(
+                        "h-6 w-6 rounded-full border-2 flex items-center justify-center text-xs font-bold",
+                        done
+                          ? "bg-emerald-500 border-emerald-500 text-white"
+                          : active
+                            ? "bg-primary border-primary text-primary-foreground"
+                            : "bg-muted border-border text-muted-foreground",
+                      )}
+                    >
+                      {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span>{idx + 1}</span>}
+                    </div>
+                    <span
+                      className={cn(
+                        "text-[9px] whitespace-nowrap",
+                        active ? "font-semibold text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                  </div>
+                  {!last && (
+                    <div
+                      className={cn(
+                        "h-0.5 w-6 sm:w-10 mx-1 mb-4",
+                        done ? "bg-emerald-500" : "bg-border",
+                      )}
+                    />
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+
+        {/* Actions */}
+        {showActions && (
+          <div className="px-4 py-2.5 border-t bg-muted/30 flex items-center justify-end gap-2 flex-wrap mt-auto">
+            {win.status === "draft" && canSubmit && (
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => submitDraft(win)}
+                className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Send className="h-3.5 w-3.5" /> Submit
+              </button>
+            )}
+            {canReject && (
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => reject(win)}
+                className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-destructive/10 hover:border-destructive hover:text-destructive disabled:opacity-50"
+              >
+                <XCircle className="h-3.5 w-3.5" /> Return
+              </button>
+            )}
+            {canApprove && (
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => advance(win, nextStatus)}
+                className={cn(
+                  "h-8 px-3 rounded-md text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50",
+                  nextStatus === "published"
+                    ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                    : "bg-primary text-primary-foreground hover:opacity-90",
+                )}
+              >
+                {nextStatus === "published" ? (
+                  <BookOpen className="h-3.5 w-3.5" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+                {approveLabel}
+              </button>
+            )}
+            {win.status === "published" && (
+              <>
+                {canRevertPublished && (
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => revertPublished(win)}
+                    className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                    title="Admin only — returns schedule to Draft (data unchanged)"
+                  >
+                    <Undo2 className="h-3.5 w-3.5" /> Unpublish
+                  </button>
+                )}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {win.ward === null && winFacilities.length > 1 && (
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-xs text-muted-foreground font-medium">Facility:</span>
+                      <select
+                        value={currentFacility}
+                        onChange={(e) =>
+                          setExportFacility((prev) => ({ ...prev, [key]: e.target.value }))
+                        }
+                        className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        <option value="">All</option>
+                        {winFacilities.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!!isDownloadingCard}
+                    onClick={() => handleDownloadExcel(win)}
+                    className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                    {downloading === key + "-xlsx" ? "…" : "Excel"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!isDownloadingCard}
+                    onClick={() => handleDownloadPdf(win)}
+                    className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                  >
+                    <FileDown className="h-3.5 w-3.5 text-red-500" />
+                    {downloading === key + "-pdf" ? "…" : "PDF"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Page render ────────────────────────────────────────────────────────────
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader title="Approval Workflow" subtitle="Draft → Chief Matron → CNO → Published" />
 
       {isLoading ? (
@@ -571,296 +831,73 @@ td.sm{text-align:left;color:#444;min-width:55px}
           description="Generate a rota from the Rota page — it will appear here once created."
         />
       ) : (
-        <div className="space-y-4">
-          {windows.map((win) => {
-            const key = winKey(win);
-            const isBusy = busy === key;
-            const isDownloading = downloading?.startsWith(key);
-            const stepIndex =
-              win.status === "published"
-                ? STEPS.length
-                : STEPS.findIndex((s) => s.status === win.status);
+        <>
+          {/* Facility tab bar */}
+          {availableFacilities.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+              {availableFacilities.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  disabled={!!lockedFacility && lockedFacility !== f}
+                  onClick={() => setSelectedFacility(f)}
+                  className={cn(
+                    "px-4 py-1.5 rounded-full text-sm font-medium border transition",
+                    effectiveFacility === f
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card hover:bg-muted border-border",
+                    !!lockedFacility && lockedFacility !== f && "opacity-40 cursor-not-allowed",
+                  )}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          )}
 
-            // ── Facility / ward info (used in header + export) ────────────
-            // Filter rows to this specific ward window so nurse counts are accurate.
-            const winNurseIds = new Set(
-              rows
-                .filter(
-                  (r) =>
-                    r.shift_date >= win.startDate &&
-                    r.shift_date <= win.endDate &&
-                    (win.ward !== null ? r.ward === win.ward : r.ward === null),
-                )
-                .map((r) => r.nurse_id),
-            );
-            const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
-            const winFacilities = [
-              ...new Set(winNurses.map((n) => n.facility).filter((f): f is string => !!f)),
-            ].sort();
+          {/* Periods for the selected facility */}
+          {windowsByPeriod.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">
+              No schedules for {effectiveFacility}.
+            </p>
+          ) : (
+            <div className="space-y-8">
+              {windowsByPeriod.map(([periodStart, periodWins]) => {
+                const periodEnd = scheduleEndDate(periodStart);
+                const coverageWins = periodWins.filter((w) => w.ward === null);
+                const wardWins = periodWins.filter((w) => w.ward !== null);
+                return (
+                  <div key={periodStart}>
+                    {/* Period header */}
+                    <div className="flex items-center gap-2 mb-4">
+                      <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <h2 className="text-sm font-semibold text-foreground">
+                        {fmtDate(periodStart)} — {fmtDate(periodEnd)}
+                      </h2>
+                      <span className="text-xs text-muted-foreground">
+                        · {periodWins.length} schedule{periodWins.length !== 1 ? "s" : ""}
+                      </span>
+                      <div className="flex-1 h-px bg-border ml-1" />
+                    </div>
 
-            // Nurses with above-baseline working shifts — indicates enforcement added extra shifts.
-            // Strategy: within each role group, anyone above the group minimum has extra shifts.
-            const winRows = rows.filter(
-              (r) =>
-                r.shift_date >= win.startDate &&
-                r.shift_date <= win.endDate &&
-                (win.ward !== null ? r.ward === win.ward : r.ward === null),
-            );
-            const winShiftCounts = new Map<string, number>();
-            for (const r of winRows) {
-              if (r.shift === "M" || r.shift === "N")
-                winShiftCounts.set(r.nurse_id, (winShiftCounts.get(r.nurse_id) ?? 0) + 1);
-            }
-            const byRole = new Map<string, string[]>();
-            for (const n of winNurses) {
-              const g = byRole.get(n.role) ?? [];
-              g.push(n.id);
-              byRole.set(n.role, g);
-            }
-            const extraStaff: { name: string; extra: number }[] = [];
-            for (const ids of byRole.values()) {
-              const counts = ids.map((id) => winShiftCounts.get(id) ?? 0);
-              const baseline = Math.min(...counts);
-              for (const id of ids) {
-                const diff = (winShiftCounts.get(id) ?? 0) - baseline;
-                if (diff > 0) {
-                  const nurse = winNurses.find((n) => n.id === id);
-                  if (nurse) extraStaff.push({ name: nurse.name, extra: diff });
-                }
-              }
-            }
+                    <div className="space-y-3">
+                      {/* Coverage Nurses — full width */}
+                      {coverageWins.map((win) => renderCard(win))}
 
-            const currentFacility = exportFacility[key] ?? "";
-
-            let canApprove = false;
-            let nextStatus: AssignmentStatus = "draft";
-            let approveLabel = "";
-            if (win.status === "submitted" && canApproveChief) {
-              canApprove = true;
-              nextStatus = "approved_chief";
-              approveLabel = "Approve (Chief Matron)";
-            } else if (win.status === "approved_chief" && canApproveCNO) {
-              canApprove = true;
-              nextStatus = "approved_cno";
-              approveLabel = "Approve (CNO)";
-            } else if (win.status === "approved_cno" && canPublish) {
-              canApprove = true;
-              nextStatus = "published";
-              approveLabel = "Publish Rota";
-            }
-
-            const canReject =
-              win.status !== "draft" &&
-              win.status !== "published" &&
-              ((win.status === "submitted" && canApproveChief) ||
-                (win.status === "approved_chief" && canApproveCNO) ||
-                (win.status === "approved_cno" && canPublish));
-
-            const showActions =
-              (win.status === "draft" && canSubmit) ||
-              canApprove ||
-              canReject ||
-              win.status === "published";
-
-            return (
-              <div key={key} className="rounded-xl border bg-card overflow-hidden">
-                {/* Header */}
-                <div className="px-5 py-4 border-b flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-base font-semibold">{win.ward ?? "Coverage Nurses"}</p>
-                    {winFacilities.length > 0 && (
-                      <p className="text-xs font-medium text-muted-foreground mt-0.5">
-                        {winFacilities.join(" · ")}
-                      </p>
-                    )}
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {fmtDate(win.startDate)} → {fmtDate(win.endDate)} · {win.nurseCount} nurses ·{" "}
-                      {win.assignmentCount} assignments
-                    </p>
-                    {extraStaff.length > 0 && (
-                      <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
-                        Extra shifts (safety enforcement):{" "}
-                        {extraStaff.map((e) => `${e.name} +${e.extra * 12} h`).join(", ")}
-                      </p>
-                    )}
-                  </div>
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border shrink-0",
-                      STATUS_COLORS[win.status],
-                    )}
-                  >
-                    {win.status === "published" ? (
-                      <CheckCircle2 className="h-3 w-3" />
-                    ) : (
-                      <Clock className="h-3 w-3" />
-                    )}
-                    {STATUS_LABELS[win.status]}
-                  </span>
-                </div>
-
-                {/* Step tracker */}
-                <div className="px-5 py-4">
-                  <ol className="flex items-center gap-0">
-                    {STEPS.map((step, idx) => {
-                      const done = idx < stepIndex;
-                      const active = idx === stepIndex;
-                      const last = idx === STEPS.length - 1;
-                      return (
-                        <li key={step.key} className="flex items-center">
-                          <div className="flex flex-col items-center gap-1">
-                            <div
-                              className={cn(
-                                "h-7 w-7 rounded-full border-2 flex items-center justify-center text-xs font-bold",
-                                done
-                                  ? "bg-emerald-500 border-emerald-500 text-white"
-                                  : active
-                                    ? "bg-primary border-primary text-primary-foreground"
-                                    : "bg-muted border-border text-muted-foreground",
-                              )}
-                            >
-                              {done ? <CheckCircle2 className="h-4 w-4" /> : <span>{idx + 1}</span>}
-                            </div>
-                            <span
-                              className={cn(
-                                "text-[10px] whitespace-nowrap",
-                                active ? "font-semibold text-foreground" : "text-muted-foreground",
-                              )}
-                            >
-                              {step.label}
-                            </span>
-                          </div>
-                          {!last && (
-                            <div
-                              className={cn(
-                                "h-0.5 w-8 sm:w-14 mx-1 mb-4",
-                                done ? "bg-emerald-500" : "bg-border",
-                              )}
-                            />
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </div>
-
-                {/* Actions row */}
-                {showActions && (
-                  <div className="px-5 py-3 border-t bg-muted/30 flex items-center justify-end gap-2 flex-wrap">
-                    {/* Draft: submit */}
-                    {win.status === "draft" && canSubmit && (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => submitDraft(win)}
-                        className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
-                      >
-                        <Send className="h-3.5 w-3.5" /> Submit for Approval
-                      </button>
-                    )}
-
-                    {/* Pending: reject / approve */}
-                    {canReject && (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => reject(win)}
-                        className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-destructive/10 hover:border-destructive hover:text-destructive disabled:opacity-50"
-                      >
-                        <XCircle className="h-3.5 w-3.5" /> Return to Draft
-                      </button>
-                    )}
-                    {canApprove && (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => advance(win, nextStatus)}
-                        className={cn(
-                          "h-8 px-3 rounded-md text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50",
-                          nextStatus === "published"
-                            ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                            : "bg-primary text-primary-foreground hover:opacity-90",
-                        )}
-                      >
-                        {nextStatus === "published" ? (
-                          <BookOpen className="h-3.5 w-3.5" />
-                        ) : (
-                          <Send className="h-3.5 w-3.5" />
-                        )}
-                        {approveLabel}
-                      </button>
-                    )}
-
-                    {/* Published: revert (admin only) + export controls */}
-                    {win.status === "published" && (
-                      <>
-                        {canRevertPublished && (
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => revertPublished(win)}
-                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
-                            title="Admin only — returns schedule to Draft (data unchanged)"
-                          >
-                            <Undo2 className="h-3.5 w-3.5" /> Unpublish to Draft
-                          </button>
-                        )}
-
-                        {/* Export — scoped automatically to this card's ward.
-                            Coverage Nurse cards with multiple facilities expose a facility filter. */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {win.ward === null && winFacilities.length > 1 && (
-                            <label className="flex items-center gap-1.5">
-                              <span className="text-xs text-muted-foreground font-medium">
-                                Facility:
-                              </span>
-                              <select
-                                value={currentFacility}
-                                onChange={(e) =>
-                                  setExportFacility((prev) => ({
-                                    ...prev,
-                                    [key]: e.target.value,
-                                  }))
-                                }
-                                className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
-                              >
-                                <option value="">All Facilities</option>
-                                {winFacilities.map((f) => (
-                                  <option key={f} value={f}>
-                                    {f}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          )}
-
-                          <button
-                            type="button"
-                            disabled={!!isDownloading}
-                            onClick={() => handleDownloadExcel(win)}
-                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                          >
-                            <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                            {downloading === key + "-xlsx" ? "Generating…" : "Excel"}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!!isDownloading}
-                            onClick={() => handleDownloadPdf(win)}
-                            className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                          >
-                            <FileDown className="h-3.5 w-3.5 text-red-500" />
-                            {downloading === key + "-pdf" ? "Generating…" : "PDF"}
-                          </button>
+                      {/* Ward cards — 2-col grid */}
+                      {wardWins.length > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                          {wardWins.map((win) => renderCard(win))}
                         </div>
-                      </>
-                    )}
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

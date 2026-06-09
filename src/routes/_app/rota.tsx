@@ -338,7 +338,7 @@ function RotaPage() {
         .filter((n) => n.facility === genForm.facility && n.ward)
         .flatMap((n) => parseWards(n.ward)),
     );
-    return wards.filter((w) => wardNames.has(w.name));
+    return wards.filter((w) => w.facility === genForm.facility && wardNames.has(w.name));
   }, [wards, nurses, genForm.facility]);
 
   const leaveConflicts = useMemo(() => {
@@ -530,12 +530,9 @@ function RotaPage() {
       // Pass only the wards relevant to this run so safety-rule violations are
       // scoped correctly: a ward-specific run (e.g. "IP Ward") should only
       // report violations for IP Ward, not for every other ward in the facility.
-      const facilityWards = wards.filter((w) => {
-        const wf = (w as WardInput & { facility?: string | null }).facility;
-        const facilityMatch = !wf || wf === genForm.facility;
-        const wardMatch = !genForm.ward || w.name === genForm.ward;
-        return facilityMatch && wardMatch;
-      });
+      const facilityWards = wards.filter(
+        (w) => w.facility === genForm.facility && (!genForm.ward || w.name === genForm.ward),
+      );
 
       // Find the earliest ever-scheduled day for this facility so the cycle
       // phases continue seamlessly across 28-day periods.
