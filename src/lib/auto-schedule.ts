@@ -26,6 +26,7 @@ export interface NurseInput {
 export interface WardInput {
   id: string;
   name: string;
+  facility?: string | null;
   min_morning_nurses: number;
   min_morning_supervisor: number;
   min_morning_na: number;
@@ -291,6 +292,25 @@ export const IKEJA_WARD_MINIMUMS: Record<string, WardMins> = {
 
 export const IKEJA_WARD_NAMES = Object.keys(IKEJA_WARD_MINIMUMS);
 
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+type DayName = (typeof DAY_NAMES)[number];
+
+// Day-of-week overrides keyed by "Facility|WardName". These are not stored in
+// the DB — they are applied by enforceMinima at generation time only.
+// A value of 99 for nurse/NA counts acts as "all available" (promoteOff will
+// promote every remaining OFF nurse before reaching 99).
+const DAY_OVERRIDES: Record<string, Partial<Record<DayName, Partial<WardMins>>>> = {
+  // Ligali OT: every available OT nurse must work the morning shift on Saturday.
+  "Ligali|Operation Theatre": {
+    Sat: { min_morning_nurses: 99, min_morning_na: 99 },
+  },
+  // Ikeja GOPD: minimum 7 nurses + 3 NA on Wednesdays and Fridays.
+  "Ikeja|GOPD": {
+    Wed: { min_morning_nurses: 7, min_morning_na: 3 },
+    Fri: { min_morning_nurses: 7, min_morning_na: 3 },
+  },
+};
+
 function ymd(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -464,10 +484,23 @@ function enforceMinima(
   // Track the previous day's shift per nurse to enforce the N→M rest rule.
   const prevDayShift = new Map<string, ShiftCode>();
 
+  const baseMins: WardMins = {
+    min_morning_nurses: ward.min_morning_nurses,
+    min_morning_supervisor: ward.min_morning_supervisor,
+    min_morning_na: ward.min_morning_na,
+    min_night_nurses: ward.min_night_nurses,
+    min_night_supervisor: ward.min_night_supervisor,
+    min_night_na: ward.min_night_na,
+  };
+  const overrideKey = ward.facility ? `${ward.facility}|${ward.name}` : null;
+
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + d);
     const dateStr = ymd(date);
+    const dayName = DAY_NAMES[date.getDay()];
+    const dayOverride = overrideKey ? DAY_OVERRIDES[overrideKey]?.[dayName] : undefined;
+    const mins: WardMins = dayOverride ? { ...baseMins, ...dayOverride } : baseMins;
 
     const dayAssignments = out.filter((a) => a.shift_date === dateStr && nurseById.has(a.nurse_id));
 
@@ -564,9 +597,9 @@ function enforceMinima(
     // --- Morning enforcement (exact count) ---
     // Demote any excess back to OFF first, then promote any deficit from OFF.
     // This ensures the final count is exactly the configured target, not just ≥.
-    demoteExcess(ward.min_morning_supervisor, "M", isWardSupervisor);
+    demoteExcess(mins.min_morning_supervisor, "M", isWardSupervisor);
     let supShortfall = promoteOff(
-      ward.min_morning_supervisor,
+      mins.min_morning_supervisor,
       count("M", isWardSupervisor),
       "M",
       isWardSupervisor,
@@ -575,7 +608,7 @@ function enforceMinima(
       supShortfall = reallocateNightToMorning(
         supShortfall,
         isWardSupervisor,
-        ward.min_night_supervisor,
+        mins.min_night_supervisor,
       );
     if (supShortfall > 0)
       violations.push({
@@ -583,13 +616,13 @@ function enforceMinima(
         date: dateStr,
         shift: "M",
         role: "supervisor",
-        required: ward.min_morning_supervisor,
-        actual: ward.min_morning_supervisor - supShortfall,
+        required: mins.min_morning_supervisor,
+        actual: mins.min_morning_supervisor - supShortfall,
       });
 
-    demoteExcess(ward.min_morning_nurses, "M", isNurseOrIntern);
+    demoteExcess(mins.min_morning_nurses, "M", isNurseOrIntern);
     let nurseShortfall = promoteOff(
-      ward.min_morning_nurses,
+      mins.min_morning_nurses,
       count("M", isNurseOrIntern),
       "M",
       isNurseOrIntern,
@@ -598,7 +631,7 @@ function enforceMinima(
       nurseShortfall = reallocateNightToMorning(
         nurseShortfall,
         isNurseOrIntern,
-        ward.min_night_nurses,
+        mins.min_night_nurses,
       );
     if (nurseShortfall > 0)
       violations.push({
@@ -606,28 +639,28 @@ function enforceMinima(
         date: dateStr,
         shift: "M",
         role: "nurse",
-        required: ward.min_morning_nurses,
-        actual: ward.min_morning_nurses - nurseShortfall,
+        required: mins.min_morning_nurses,
+        actual: mins.min_morning_nurses - nurseShortfall,
       });
 
-    demoteExcess(ward.min_morning_na, "M", isNAType);
-    let naShortfall = promoteOff(ward.min_morning_na, count("M", isNAType), "M", isNAType);
+    demoteExcess(mins.min_morning_na, "M", isNAType);
+    let naShortfall = promoteOff(mins.min_morning_na, count("M", isNAType), "M", isNAType);
     if (naShortfall > 0)
-      naShortfall = reallocateNightToMorning(naShortfall, isNAType, ward.min_night_na);
+      naShortfall = reallocateNightToMorning(naShortfall, isNAType, mins.min_night_na);
     if (naShortfall > 0)
       violations.push({
         ward: ward.name,
         date: dateStr,
         shift: "M",
         role: "na",
-        required: ward.min_morning_na,
-        actual: ward.min_morning_na - naShortfall,
+        required: mins.min_morning_na,
+        actual: mins.min_morning_na - naShortfall,
       });
 
     // --- Night enforcement (exact count) ---
-    demoteExcess(ward.min_night_supervisor, "N", isWardSupervisor);
+    demoteExcess(mins.min_night_supervisor, "N", isWardSupervisor);
     const nSupShortfall = promoteOff(
-      ward.min_night_supervisor,
+      mins.min_night_supervisor,
       count("N", isWardSupervisor),
       "N",
       isWardSupervisor,
@@ -638,13 +671,13 @@ function enforceMinima(
         date: dateStr,
         shift: "N",
         role: "supervisor",
-        required: ward.min_night_supervisor,
-        actual: ward.min_night_supervisor - nSupShortfall,
+        required: mins.min_night_supervisor,
+        actual: mins.min_night_supervisor - nSupShortfall,
       });
 
-    demoteExcess(ward.min_night_nurses, "N", isNurseOrIntern);
+    demoteExcess(mins.min_night_nurses, "N", isNurseOrIntern);
     const nNurseShortfall = promoteOff(
-      ward.min_night_nurses,
+      mins.min_night_nurses,
       count("N", isNurseOrIntern),
       "N",
       isNurseOrIntern,
@@ -655,20 +688,20 @@ function enforceMinima(
         date: dateStr,
         shift: "N",
         role: "nurse",
-        required: ward.min_night_nurses,
-        actual: ward.min_night_nurses - nNurseShortfall,
+        required: mins.min_night_nurses,
+        actual: mins.min_night_nurses - nNurseShortfall,
       });
 
-    demoteExcess(ward.min_night_na, "N", isNAType);
-    const nNaShortfall = promoteOff(ward.min_night_na, count("N", isNAType), "N", isNAType);
+    demoteExcess(mins.min_night_na, "N", isNAType);
+    const nNaShortfall = promoteOff(mins.min_night_na, count("N", isNAType), "N", isNAType);
     if (nNaShortfall > 0)
       violations.push({
         ward: ward.name,
         date: dateStr,
         shift: "N",
         role: "na",
-        required: ward.min_night_na,
-        actual: ward.min_night_na - nNaShortfall,
+        required: mins.min_night_na,
+        actual: mins.min_night_na - nNaShortfall,
       });
 
     // Update cumulative counts and prev-shift map from today's finalized assignments.
