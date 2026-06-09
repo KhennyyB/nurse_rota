@@ -186,6 +186,111 @@ export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
 
 export const IKOYI_WARD_NAMES = Object.keys(IKOYI_WARD_MINIMUMS);
 
+// Ligali-specific minimum staffing per ward.
+// Note: Operation Theatre is morning-only (no night shift).
+// Special rule not yet enforced: all OT nurses on duty every Saturday.
+export const LIGALI_WARD_MINIMUMS: Record<string, WardMins> = {
+  ER: {
+    min_morning_nurses: 2,
+    min_morning_supervisor: 0,
+    min_morning_na: 1,
+    min_night_nurses: 1,
+    min_night_supervisor: 0,
+    min_night_na: 1,
+  },
+  GOPD: {
+    min_morning_nurses: 4,
+    min_morning_supervisor: 0,
+    min_morning_na: 4,
+    min_night_nurses: 1,
+    min_night_supervisor: 0,
+    min_night_na: 1,
+  },
+  "IP Ward": {
+    min_morning_nurses: 3,
+    min_morning_supervisor: 0,
+    min_morning_na: 1,
+    min_night_nurses: 2,
+    min_night_supervisor: 0,
+    min_night_na: 1,
+  },
+  "ICU & CathLab": {
+    min_morning_nurses: 3,
+    min_morning_supervisor: 0,
+    min_morning_na: 1,
+    min_night_nurses: 1,
+    min_night_supervisor: 0,
+    min_night_na: 1,
+  },
+  "Operation Theatre": {
+    min_morning_nurses: 2,
+    min_morning_supervisor: 0,
+    min_morning_na: 2,
+    min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+};
+
+export const LIGALI_WARD_NAMES = Object.keys(LIGALI_WARD_MINIMUMS);
+
+// Ikeja-specific minimum staffing per ward.
+// Several wards are morning-only (Labour Ward, ER, SCBU, HDU, GOPD).
+// Special rule not yet enforced: Ikeja GOPD requires 7 nurses + 3 NA on
+// Wednesdays and Fridays (day-of-week override, not expressible as a static min).
+export const IKEJA_WARD_MINIMUMS: Record<string, WardMins> = {
+  "IP Ward": {
+    min_morning_nurses: 10,
+    min_morning_supervisor: 0,
+    min_morning_na: 3,
+    min_night_nurses: 9,
+    min_night_supervisor: 0,
+    min_night_na: 2,
+  },
+  "Labour Ward": {
+    min_morning_nurses: 1,
+    min_morning_supervisor: 0,
+    min_morning_na: 0,
+    min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+  ER: {
+    min_morning_nurses: 1,
+    min_morning_supervisor: 0,
+    min_morning_na: 0,
+    min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+  SCBU: {
+    min_morning_nurses: 2,
+    min_morning_supervisor: 0,
+    min_morning_na: 0,
+    min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+  HDU: {
+    min_morning_nurses: 1,
+    min_morning_supervisor: 0,
+    min_morning_na: 0,
+    min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+  GOPD: {
+    min_morning_nurses: 5,
+    min_morning_supervisor: 0,
+    min_morning_na: 3,
+    min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+};
+
+export const IKEJA_WARD_NAMES = Object.keys(IKEJA_WARD_MINIMUMS);
+
 function ymd(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");

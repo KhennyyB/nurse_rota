@@ -9,7 +9,14 @@ import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import { IKOYI_WARD_MINIMUMS, IKOYI_WARD_NAMES } from "@/lib/auto-schedule";
+import {
+  IKOYI_WARD_MINIMUMS,
+  IKOYI_WARD_NAMES,
+  IKEJA_WARD_MINIMUMS,
+  IKEJA_WARD_NAMES,
+  LIGALI_WARD_MINIMUMS,
+  LIGALI_WARD_NAMES,
+} from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/wards")({
   head: () => ({
@@ -63,9 +70,15 @@ function WardsPage() {
     ? wards.filter((w) => w.facility === selectedFacility)
     : wards;
 
-  // Ikoyi wards that haven't been seeded yet (missing from DB entirely).
+  // Wards that haven't been seeded yet per facility.
   const missingIkoyiWards = IKOYI_WARD_NAMES.filter(
     (n) => !wards.some((w) => w.name === n && w.facility === "Ikoyi"),
+  );
+  const missingIkejaWards = IKEJA_WARD_NAMES.filter(
+    (n) => !wards.some((w) => w.name === n && w.facility === "Ikeja"),
+  );
+  const missingLigaliWards = LIGALI_WARD_NAMES.filter(
+    (n) => !wards.some((w) => w.name === n && w.facility === "Ligali"),
   );
 
   async function del(w: Ward) {
@@ -120,6 +133,82 @@ function WardsPage() {
 
       toast.success(`All ${rows.length} Ikoyi wards seeded / updated`);
       logAudit("Seeded Ikoyi ward defaults", IKOYI_WARD_NAMES.join(", "));
+      qc.invalidateQueries({ queryKey: ["wards"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSeeding(false);
+    }
+  }
+
+  async function seedIkejaWards() {
+    setSeeding(true);
+    try {
+      const rows = IKEJA_WARD_NAMES.map((name) => ({
+        name,
+        facility: "Ikeja",
+        ...IKEJA_WARD_MINIMUMS[name],
+      }));
+      for (const row of rows) {
+        const existing = wards.find((w) => w.name === row.name && w.facility === "Ikeja");
+        if (existing) {
+          const { error } = await supabase
+            .from("wards")
+            .update({
+              min_morning_nurses: row.min_morning_nurses,
+              min_morning_supervisor: row.min_morning_supervisor,
+              min_morning_na: row.min_morning_na,
+              min_night_nurses: row.min_night_nurses,
+              min_night_supervisor: row.min_night_supervisor,
+              min_night_na: row.min_night_na,
+            })
+            .eq("id", existing.id);
+          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
+        } else {
+          const { error } = await supabase.from("wards").insert(row);
+          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
+        }
+      }
+      toast.success(`All ${rows.length} Ikeja wards seeded / updated`);
+      logAudit("Seeded Ikeja ward defaults", IKEJA_WARD_NAMES.join(", "));
+      qc.invalidateQueries({ queryKey: ["wards"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSeeding(false);
+    }
+  }
+
+  async function seedLigaliWards() {
+    setSeeding(true);
+    try {
+      const rows = LIGALI_WARD_NAMES.map((name) => ({
+        name,
+        facility: "Ligali",
+        ...LIGALI_WARD_MINIMUMS[name],
+      }));
+      for (const row of rows) {
+        const existing = wards.find((w) => w.name === row.name && w.facility === "Ligali");
+        if (existing) {
+          const { error } = await supabase
+            .from("wards")
+            .update({
+              min_morning_nurses: row.min_morning_nurses,
+              min_morning_supervisor: row.min_morning_supervisor,
+              min_morning_na: row.min_morning_na,
+              min_night_nurses: row.min_night_nurses,
+              min_night_supervisor: row.min_night_supervisor,
+              min_night_na: row.min_night_na,
+            })
+            .eq("id", existing.id);
+          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
+        } else {
+          const { error } = await supabase.from("wards").insert(row);
+          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
+        }
+      }
+      toast.success(`All ${rows.length} Ligali wards seeded / updated`);
+      logAudit("Seeded Ligali ward defaults", LIGALI_WARD_NAMES.join(", "));
       qc.invalidateQueries({ queryKey: ["wards"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -190,7 +279,7 @@ function WardsPage() {
             ))}
           </div>
 
-          {/* Ikoyi: seed button — only shown when wards are missing from DB */}
+          {/* Seed banners — shown when default wards are missing from DB */}
           {selectedFacility === "Ikoyi" && canManageStaff && missingIkoyiWards.length > 0 && (
             <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
               <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
@@ -214,6 +303,52 @@ function WardsPage() {
               </button>
             </div>
           )}
+          {selectedFacility === "Ikeja" && canManageStaff && missingIkejaWards.length > 0 && (
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
+              <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
+                  {missingIkejaWards.length} ward{missingIkejaWards.length > 1 ? "s" : ""} not yet
+                  created
+                </p>
+                <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
+                  {missingIkejaWards.join(", ")}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={seeding}
+                onClick={seedIkejaWards}
+                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
+              >
+                {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
+                {seeding ? "Syncing…" : "Sync defaults"}
+              </button>
+            </div>
+          )}
+          {selectedFacility === "Ligali" && canManageStaff && missingLigaliWards.length > 0 && (
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
+              <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
+                  {missingLigaliWards.length} ward{missingLigaliWards.length > 1 ? "s" : ""} not
+                  yet created
+                </p>
+                <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
+                  {missingLigaliWards.join(", ")}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={seeding}
+                onClick={seedLigaliWards}
+                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
+              >
+                {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
+                {seeding ? "Syncing…" : "Sync defaults"}
+              </button>
+            </div>
+          )}
 
           {isLoading ? (
             <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
@@ -223,8 +358,8 @@ function WardsPage() {
               title="No wards configured"
               description={
                 canManageStaff
-                  ? selectedFacility === "Ikoyi"
-                    ? "Click 'Seed defaults' above to populate Ikoyi wards, or add them manually."
+                  ? ["Ikoyi", "Ikeja", "Ligali"].includes(selectedFacility)
+                    ? "Click 'Sync defaults' above to populate wards, or add them manually."
                     : "Add wards to define minimum staffing rules per shift."
                   : "Ask an administrator to configure wards."
               }
