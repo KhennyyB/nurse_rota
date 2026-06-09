@@ -92,6 +92,8 @@ export function AppShell() {
   }
 
   const visibleNav = nav.filter((n) => {
+    // Admin always sees every page — menu permissions apply to non-admin roles only.
+    if (activeRole === "admin") return true;
     const effectiveRoles = getEffectiveRoles(n.to, menuPermissions);
     return activeRole ? effectiveRoles.includes(activeRole) : roles.length === 0;
   });

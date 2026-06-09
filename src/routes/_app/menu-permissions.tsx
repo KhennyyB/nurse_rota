@@ -62,8 +62,8 @@ function MenuPermissionsPage() {
     const toStore: Record<string, AppRole[]> = {};
     for (const def of NAV_DEFINITIONS) {
       let roles = draft[def.key] ?? def.defaultRoles;
-      // Enforce: admin always has access to locked pages.
-      if (ADMIN_LOCKED_KEYS.has(def.key) && !roles.includes("admin")) {
+      // Enforce: admin always has access to every page.
+      if (!roles.includes("admin")) {
         roles = ["admin", ...roles];
       }
       const defaultSorted = [...def.defaultRoles].sort().join(",");
@@ -86,8 +86,8 @@ function MenuPermissionsPage() {
   }
 
   function toggleRole(navKey: string, role: AppRole) {
-    // Never allow unchecking admin on locked pages.
-    if (ADMIN_LOCKED_KEYS.has(navKey) && role === "admin") return;
+    // Admin always has access to every page — never allow unchecking admin.
+    if (role === "admin") return;
     setDraft((prev) => {
       const current = prev[navKey] ?? getEffectiveRoles(navKey, overrides);
       const has = current.includes(role);
@@ -196,7 +196,8 @@ function MenuPermissionsPage() {
                     </td>
                     {ROLES.map((role) => {
                       const checked = effectiveRoles.includes(role);
-                      const cellLocked = isLocked && role === "admin";
+                      // Admin column is always locked on every row.
+                      const cellLocked = role === "admin";
 
                       return (
                         <td key={role} className="px-3 py-2.5 text-center">
@@ -235,13 +236,14 @@ function MenuPermissionsPage() {
         {/* Footer note */}
         {editing ? (
           <p className="px-5 py-3 border-t text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/20">
-            Editing mode — check or uncheck pages per role. Pages marked{" "}
-            <Lock className="h-3 w-3 inline" /> admin-locked always remain visible to admins.
+            Editing mode — check or uncheck pages per role. The Admin column is always locked;
+            admins see every page regardless of this matrix.
           </p>
         ) : (
           <p className="px-5 py-3 border-t text-xs text-muted-foreground">
-            Hiding a page removes it from the sidebar for that role. Users who navigate directly
-            to the URL will still be redirected if they lack the underlying capability.
+            Hiding a page removes it from the sidebar for that role. Admins always see every page.
+            Users who navigate directly to the URL will still be redirected if they lack the
+            underlying capability.
           </p>
         )}
       </section>
