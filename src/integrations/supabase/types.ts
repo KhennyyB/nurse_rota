@@ -130,6 +130,21 @@ export type Database = {
         };
         Relationships: [];
       };
+      portal_settings: {
+        Row: {
+          key: string;
+          value: Json;
+        };
+        Insert: {
+          key: string;
+          value?: Json;
+        };
+        Update: {
+          key?: string;
+          value?: Json;
+        };
+        Relationships: [];
+      };
       profiles: {
         Row: {
           created_at: string;

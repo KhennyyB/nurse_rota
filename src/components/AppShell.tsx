@@ -23,7 +23,7 @@ import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
 import { useAuth, ROLE_DESCRIPTIONS, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { supabase } from "@/integrations/supabase/client";
-import { loadMenuPermissions, getEffectiveRoles } from "@/lib/menu-permissions";
+import { loadMenuPermissions, getEffectiveRoles, MENU_PERMISSIONS_KEY } from "@/lib/menu-permissions";
 
 const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
 const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
@@ -62,6 +62,7 @@ export function AppShell() {
   const [open, setOpen] = useState(false);
   const [menuPermissions, setMenuPermissions] = useState(loadMenuPermissions);
 
+  // Same-tab / same-browser cache updates (instant)
   useEffect(() => {
     const handler = () => setMenuPermissions(loadMenuPermissions());
     window.addEventListener("menu-permissions-changed", handler);
@@ -69,6 +70,39 @@ export function AppShell() {
     return () => {
       window.removeEventListener("menu-permissions-changed", handler);
       window.removeEventListener("storage", handler);
+    };
+  }, []);
+
+  // Authoritative load from DB + Realtime subscription so changes apply across all users/devices
+  useEffect(() => {
+    supabase
+      .from("portal_settings")
+      .select("value")
+      .eq("key", "menu_permissions")
+      .single()
+      .then(({ data }) => {
+        if (data?.value) {
+          const perms = data.value as Record<string, AppRole[]>;
+          setMenuPermissions(perms);
+          localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(perms));
+        }
+      });
+
+    const channel = supabase
+      .channel("portal-settings-menu")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "portal_settings", filter: "key=eq.menu_permissions" },
+        (payload) => {
+          const perms = ((payload.new ?? {}) as { value?: Record<string, AppRole[]> }).value ?? {};
+          setMenuPermissions(perms);
+          localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(perms));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
     };
   }, []);
 

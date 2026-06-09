@@ -9,6 +9,7 @@ import {
   saveMenuPermissions,
   getEffectiveRoles,
 } from "@/lib/menu-permissions";
+import { supabase } from "@/integrations/supabase/client";
 import { Check, X, Pencil, RotateCcw, ShieldAlert, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -35,10 +36,23 @@ function MenuPermissionsPage() {
   const [overrides, setOverrides] = useState<Record<string, AppRole[]>>(loadMenuPermissions);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, AppRole[]>>({});
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
+
+  // Load the authoritative value from DB on mount
+  useEffect(() => {
+    supabase
+      .from("portal_settings")
+      .select("value")
+      .eq("key", "menu_permissions")
+      .single()
+      .then(({ data }) => {
+        if (data?.value) setOverrides(data.value as Record<string, AppRole[]>);
+      });
+  }, []);
 
   function startEdit() {
     // Snapshot the full effective state (defaults + overrides) into draft
@@ -55,29 +69,41 @@ function MenuPermissionsPage() {
     setEditing(false);
   }
 
-  function saveEdit() {
-    // Only store keys that differ from the defaults to keep localStorage lean.
-    // Admin-locked keys are always written without the admin restriction so they
-    // remain accessible to admins regardless of any accidental uncheck.
+  async function saveEdit() {
     const toStore: Record<string, AppRole[]> = {};
     for (const def of NAV_DEFINITIONS) {
       let roles = draft[def.key] ?? def.defaultRoles;
-      // Enforce: admin always has access to every page.
-      if (!roles.includes("admin")) {
-        roles = ["admin", ...roles];
-      }
+      if (!roles.includes("admin")) roles = ["admin", ...roles];
       const defaultSorted = [...def.defaultRoles].sort().join(",");
       const draftSorted = [...roles].sort().join(",");
       if (defaultSorted !== draftSorted) toStore[def.key] = roles;
     }
-    saveMenuPermissions(toStore);
+    setSaving(true);
+    const { error } = await supabase
+      .from("portal_settings")
+      .upsert({ key: "menu_permissions", value: toStore });
+    setSaving(false);
+    if (error) {
+      toast.error("Failed to save: " + error.message);
+      return;
+    }
+    saveMenuPermissions(toStore); // update local cache + fire same-tab event
     setOverrides(toStore);
     setEditing(false);
     toast.success("Menu permissions saved");
   }
 
-  function resetDefaults() {
+  async function resetDefaults() {
     if (!confirm("Reset menu visibility to system defaults for all roles?")) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("portal_settings")
+      .upsert({ key: "menu_permissions", value: {} });
+    setSaving(false);
+    if (error) {
+      toast.error("Failed to reset: " + error.message);
+      return;
+    }
     saveMenuPermissions({});
     setOverrides({});
     setDraft({});
@@ -130,16 +156,18 @@ function MenuPermissionsPage() {
                 <button
                   type="button"
                   onClick={cancelEdit}
-                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                  disabled={saving}
+                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={saveEdit}
-                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium"
+                  disabled={saving}
+                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
                 >
-                  Save changes
+                  {saving ? "Saving…" : "Save changes"}
                 </button>
               </>
             ) : (
@@ -147,8 +175,9 @@ function MenuPermissionsPage() {
                 <button
                   type="button"
                   onClick={resetDefaults}
+                  disabled={saving}
                   title="Reset to defaults"
-                  className="h-8 w-8 grid place-items-center rounded-md border bg-card hover:bg-muted text-muted-foreground"
+                  className="h-8 w-8 grid place-items-center rounded-md border bg-card hover:bg-muted text-muted-foreground disabled:opacity-50"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                 </button>
