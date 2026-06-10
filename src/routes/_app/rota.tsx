@@ -355,10 +355,19 @@ function RotaPage() {
     nurseId,
   ]);
 
-  // Wards for the generate dialog — query directly by facility so the list is
-  // always accurate regardless of how the client-side wards cache is tagged.
+  // Wards filtered by facility — shared by both the toolbar and generate dialog.
+  // Queried directly from DB so duplicates / missing facility tags don't affect the list.
+  const { data: facilityFilteredWards = [] } = useQuery<WardInput[]>({
+    queryKey: ["wards-by-facility", selectedFacility],
+    queryFn: async () => {
+      let q = supabase.from("wards").select("*").order("name");
+      if (selectedFacility) q = q.eq("facility", selectedFacility);
+      return ((await q).data ?? []) as WardInput[];
+    },
+  });
+
   const { data: genWards = [] } = useQuery<WardInput[]>({
-    queryKey: ["wards", genForm.facility],
+    queryKey: ["wards-by-facility", genForm.facility],
     queryFn: async () => {
       let q = supabase.from("wards").select("*").order("name");
       if (genForm.facility) q = q.eq("facility", genForm.facility);
@@ -920,8 +929,8 @@ function RotaPage() {
             className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">All Wards</option>
-            {wards.map((w) => (
-              <option key={w.name}>{w.name}</option>
+            {facilityFilteredWards.map((w) => (
+              <option key={w.id}>{w.name}</option>
             ))}
           </select>
         )}
