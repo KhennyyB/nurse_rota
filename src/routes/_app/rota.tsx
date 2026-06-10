@@ -355,28 +355,17 @@ function RotaPage() {
     nurseId,
   ]);
 
-  // Generate dialog: unique ward names derived from nurses in the selected facility.
-  // Deriving from nurses avoids duplicate/untagged ward rows in the wards table.
-  const genWards = useMemo(() => {
-    if (!genForm.facility) {
-      const seen = new Set<string>();
-      return wards.filter((w) => {
-        const fresh = !seen.has(w.name);
-        seen.add(w.name);
-        return fresh;
-      });
-    }
-    const names = [
-      ...new Set(
-        nurses
-          .filter((n) => n.facility === genForm.facility && n.ward)
-          .flatMap((n) => parseWards(n.ward)),
-      ),
-    ].sort();
-    return names.map(
-      (name) => wards.find((w) => w.name === name) ?? ({ id: name, name } as WardInput),
-    );
-  }, [wards, nurses, genForm.facility]);
+  // Wards for the generate dialog — query directly by facility so the list is
+  // always accurate regardless of how the client-side wards cache is tagged.
+  const { data: genWards = [] } = useQuery<WardInput[]>({
+    queryKey: ["wards", genForm.facility],
+    queryFn: async () => {
+      let q = supabase.from("wards").select("*").order("name");
+      if (genForm.facility) q = q.eq("facility", genForm.facility);
+      return ((await q).data ?? []) as WardInput[];
+    },
+    enabled: !!genForm.facility,
+  });
 
   const leaveConflicts = useMemo(() => {
     return leave
@@ -567,10 +556,7 @@ function RotaPage() {
       // Pass only the wards relevant to this run so safety-rule violations are
       // scoped correctly: a ward-specific run (e.g. "IP Ward") should only
       // report violations for IP Ward, not for every other ward in the facility.
-      const facilityWardNames = new Set(genWards.map((w) => w.name));
-      const facilityWards = wards.filter(
-        (w) => facilityWardNames.has(w.name) && (!genForm.ward || w.name === genForm.ward),
-      );
+      const facilityWards = genWards.filter((w) => !genForm.ward || w.name === genForm.ward);
 
       // Find the earliest ever-scheduled day for this facility so the cycle
       // phases continue seamlessly across 28-day periods.
