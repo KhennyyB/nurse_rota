@@ -355,18 +355,26 @@ function RotaPage() {
     nurseId,
   ]);
 
-  // Generate dialog: wards that belong to the selected facility.
-  // Primary filter: ward.facility column. Fallback: wards with no facility set that
-  // have at least one nurse from this facility assigned, so untagged wards still appear.
+  // Generate dialog: unique ward names derived from nurses in the selected facility.
+  // Deriving from nurses avoids duplicate/untagged ward rows in the wards table.
   const genWards = useMemo(() => {
-    if (!genForm.facility) return wards;
-    const wardNames = new Set(
-      nurses
-        .filter((n) => n.facility === genForm.facility && n.ward)
-        .flatMap((n) => parseWards(n.ward)),
-    );
-    return wards.filter(
-      (w) => w.facility === genForm.facility || (!w.facility && wardNames.has(w.name)),
+    if (!genForm.facility) {
+      const seen = new Set<string>();
+      return wards.filter((w) => {
+        const fresh = !seen.has(w.name);
+        seen.add(w.name);
+        return fresh;
+      });
+    }
+    const names = [
+      ...new Set(
+        nurses
+          .filter((n) => n.facility === genForm.facility && n.ward)
+          .flatMap((n) => parseWards(n.ward)),
+      ),
+    ].sort();
+    return names.map(
+      (name) => wards.find((w) => w.name === name) ?? ({ id: name, name } as WardInput),
     );
   }, [wards, nurses, genForm.facility]);
 
@@ -559,8 +567,9 @@ function RotaPage() {
       // Pass only the wards relevant to this run so safety-rule violations are
       // scoped correctly: a ward-specific run (e.g. "IP Ward") should only
       // report violations for IP Ward, not for every other ward in the facility.
+      const facilityWardNames = new Set(genWards.map((w) => w.name));
       const facilityWards = wards.filter(
-        (w) => w.facility === genForm.facility && (!genForm.ward || w.name === genForm.ward),
+        (w) => facilityWardNames.has(w.name) && (!genForm.ward || w.name === genForm.ward),
       );
 
       // Find the earliest ever-scheduled day for this facility so the cycle
