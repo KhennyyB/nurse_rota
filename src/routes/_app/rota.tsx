@@ -24,6 +24,7 @@ import {
   nextInternWard,
   isInternType,
   isGlobalHead,
+  SHIFT_TIMES,
   type ShiftCode,
   type NurseInput,
   type WardInput,
@@ -296,11 +297,12 @@ function RotaPage() {
     return m;
   }, [assignments]);
 
-  // Total working hours (M+N shifts × 12 h) per nurse for the current period.
-  const nurseShiftCounts = useMemo(() => {
+  // Total scheduled hours per nurse for the current period (M=8 h, N=14 h).
+  const nurseScheduledHours = useMemo(() => {
     const m = new Map<string, number>();
     assignments.forEach((a) => {
-      if (a.shift === "M" || a.shift === "N") m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + 1);
+      if (a.shift === "M") m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + SHIFT_TIMES.M.hours);
+      else if (a.shift === "N") m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + SHIFT_TIMES.N.hours);
     });
     return m;
   }, [assignments]);
@@ -1058,7 +1060,7 @@ function RotaPage() {
               {extraShifts
                 .map(
                   (e) =>
-                    `${e.nurseName} (+${e.extraCount} shift${e.extraCount > 1 ? "s" : ""}, +${e.extraCount * 12} h)`,
+                    `${e.nurseName} (+${e.extraCount} extra shift${e.extraCount > 1 ? "s" : ""})`,
                 )
                 .join(" · ")}
             </p>
@@ -1163,7 +1165,7 @@ function RotaPage() {
                             : "text-muted-foreground",
                         )}
                       >
-                        {(nurseShiftCounts.get(n.id) ?? 0) * 12}h
+                        {nurseScheduledHours.get(n.id) ?? 0}h
                       </span>
                     </td>
                     {days.map((dt) => {
@@ -1395,8 +1397,8 @@ function RotaPage() {
 
 function Legend() {
   const items: { code: ShiftCode; label: string; time: string }[] = [
-    { code: "M", label: "Morning", time: "08:00–17:00" },
-    { code: "N", label: "Night", time: "17:00–08:00" },
+    { code: "M", label: "Morning", time: "08:00–16:00" },
+    { code: "N", label: "Night", time: "17:00–07:00" },
     { code: "OFF", label: "Off", time: "" },
     { code: "LEAVE", label: "Leave", time: "" },
   ];

@@ -247,7 +247,7 @@ function NurseDashboard() {
     OFF: "bg-muted text-muted-foreground border-transparent",
     LEAVE: "bg-rose-100 text-rose-800 border-rose-200",
   };
-  const shiftTime: Record<string, string> = { M: "08:00 – 17:00", N: "17:00 – 08:00" };
+  const shiftTime: Record<string, string> = { M: "08:00 – 16:00", N: "17:00 – 07:00" };
 
   const isShiftActive = activeLog?.ended_at == null;
   const elapsedMs =

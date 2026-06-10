@@ -10,8 +10,8 @@
 export type ShiftCode = "M" | "N" | "OFF" | "LEAVE";
 
 export const SHIFT_TIMES = {
-  M: { start: "08:00", end: "17:00", hours: 8, label: "Morning" },
-  N: { start: "17:00", end: "08:00", hours: 14, label: "Night" },
+  M: { start: "08:00", end: "16:00", hours: 8, label: "Morning" },
+  N: { start: "17:00", end: "07:00", hours: 14, label: "Night" },
 } as const;
 
 export interface NurseInput {
@@ -725,7 +725,7 @@ export function nextInternWard(currentWard: string | null, wardNames: string[]):
 export interface ExtraShift {
   nurseId: string;
   nurseName: string;
-  /** Number of extra shifts added by safety enforcement (each = 12 h). */
+  /** Number of extra shifts added by safety enforcement. */
   extraCount: number;
 }
 

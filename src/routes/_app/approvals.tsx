@@ -649,7 +649,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
             {extraStaff.length > 0 && (
               <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
                 Extra shifts:{" "}
-                {extraStaff.map((e) => `${e.name} +${e.extra * 12} h`).join(", ")}
+                {extraStaff.map((e) => `${e.name} +${e.extra} extra shift${e.extra > 1 ? "s" : ""}`).join(", ")}
               </p>
             )}
           </div>
