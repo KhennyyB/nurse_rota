@@ -143,7 +143,9 @@ function ShiftPage() {
     },
   });
 
-  // Today's shift log
+  // Active shift (may span midnight for night shifts) or today's completed shift.
+  // Filtering by ended_at IS NULL catches a night shift started yesterday that hasn't
+  // auto-ended yet; including shift_date = today catches a completed morning shift.
   const { data: shiftLog } = useQuery<ShiftLog | null>({
     queryKey: ["my-shift-log", nurseId, today],
     enabled: !!nurseId,
@@ -152,11 +154,13 @@ function ShiftPage() {
         .from("shift_logs")
         .select("*")
         .eq("nurse_id", nurseId!)
-        .eq("shift_date", today)
+        .or(`ended_at.is.null,shift_date.eq.${today}`)
+        .order("started_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
       return data as ShiftLog | null;
     },
-    refetchInterval: 30000, // refresh every 30s
+    refetchInterval: 30000,
   });
 
   // Current period summary

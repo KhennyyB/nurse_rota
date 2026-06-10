@@ -62,6 +62,11 @@ export function AppShell() {
   const [open, setOpen] = useState(false);
   const [menuPermissions, setMenuPermissions] = useState(loadMenuPermissions);
 
+  // Auto-end any overdue shifts server-side on every app load (safety net for closed browsers)
+  useEffect(() => {
+    void supabase.rpc("auto_end_overdue_shifts");
+  }, []);
+
   // Same-tab / same-browser cache updates (instant)
   useEffect(() => {
     const handler = () => setMenuPermissions(loadMenuPermissions());

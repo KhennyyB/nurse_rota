@@ -404,6 +404,10 @@ export type Database = {
         };
         Returns: null;
       };
+      auto_end_overdue_shifts: {
+        Args: Record<string, never>;
+        Returns: number;
+      };
     };
     Enums: {
       app_role:
