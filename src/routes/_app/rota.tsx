@@ -355,7 +355,9 @@ function RotaPage() {
     nurseId,
   ]);
 
-  // Generate dialog: wards that belong to nurses in the selected facility
+  // Generate dialog: wards that belong to the selected facility.
+  // Primary filter: ward.facility column. Fallback: wards with no facility set that
+  // have at least one nurse from this facility assigned, so untagged wards still appear.
   const genWards = useMemo(() => {
     if (!genForm.facility) return wards;
     const wardNames = new Set(
@@ -363,7 +365,9 @@ function RotaPage() {
         .filter((n) => n.facility === genForm.facility && n.ward)
         .flatMap((n) => parseWards(n.ward)),
     );
-    return wards.filter((w) => w.facility === genForm.facility && wardNames.has(w.name));
+    return wards.filter(
+      (w) => w.facility === genForm.facility || (!w.facility && wardNames.has(w.name)),
+    );
   }, [wards, nurses, genForm.facility]);
 
   const leaveConflicts = useMemo(() => {
