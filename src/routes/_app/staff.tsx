@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, useMemo, type FormEvent } from "react";
 import {
   UserPlus,
   Search,
@@ -115,6 +115,35 @@ function StaffPage() {
     queryKey: ["wards"],
     queryFn: async () => (await supabase.from("wards").select("name").order("name")).data ?? [],
   });
+
+  // Lookback: last 27 days (one rota period). Memoised so queryKey is stable.
+  const lbStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 27);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  const { data: shiftLogs = [] } = useQuery<{ nurse_id: string; hours_logged: number | null }[]>({
+    queryKey: ["staff-shift-logs-current", lbStr],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_logs")
+        .select("nurse_id,hours_logged")
+        .gte("shift_date", lbStr)
+        .not("ended_at", "is", null);
+      return (data ?? []) as { nurse_id: string; hours_logged: number | null }[];
+    },
+  });
+
+  const hoursMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of shiftLogs) {
+      if (l.hours_logged != null) {
+        m.set(l.nurse_id, (m.get(l.nurse_id) ?? 0) + l.hours_logged);
+      }
+    }
+    return m;
+  }, [shiftLogs]);
 
   const delMut = useMutation({
     mutationFn: async (id: string) => {
@@ -355,10 +384,15 @@ function StaffPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
-                      <span title={`${n.hours_this_month} worked / ${n.target_hours} target`}>
-                        {n.hours_this_month}
-                        <span className="text-muted-foreground">/{n.target_hours}h</span>
-                      </span>
+                      {(() => {
+                        const hrs = Math.round(hoursMap.get(n.id) ?? 0);
+                        return (
+                          <span title={`${hrs}h worked / ${n.target_hours}h target`}>
+                            {hrs}
+                            <span className="text-muted-foreground">/{n.target_hours}h</span>
+                          </span>
+                        );
+                      })()}
                     </td>
                     {canCreateLogin && (
                       <td className="px-4 py-3 text-center">
