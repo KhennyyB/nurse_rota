@@ -111,9 +111,10 @@ function StaffPage() {
   });
   const hasLogin = (name: string) => profileNames.includes(name.toLowerCase());
 
-  const { data: wards = [] } = useQuery<{ name: string }[]>({
+  const { data: wards = [] } = useQuery<{ name: string; facility: string | null }[]>({
     queryKey: ["wards"],
-    queryFn: async () => (await supabase.from("wards").select("name").order("name")).data ?? [],
+    queryFn: async () =>
+      (await supabase.from("wards").select("name, facility").order("name")).data ?? [],
   });
 
   // Lookback: last 27 days (one rota period). Memoised so queryKey is stable.
@@ -180,7 +181,10 @@ function StaffPage() {
     setSearch("");
   };
 
-  const wardNames = wards.map((w) => w.name);
+  // Ward names shown in the filter bar: scoped to the selected facility when one is active.
+  const wardNames = (filterFacility ? wards.filter((w) => w.facility === filterFacility) : wards).map(
+    (w) => w.name,
+  );
 
   return (
     <div>
@@ -255,7 +259,10 @@ function StaffPage() {
         <select
           aria-label="Filter by facility"
           value={filterFacility}
-          onChange={(e) => setFilterFacility(e.target.value)}
+          onChange={(e) => {
+            setFilterFacility(e.target.value);
+            setFilterWard(""); // ward list changes when facility changes
+          }}
           className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
         >
           <option value="">All facilities</option>
@@ -447,11 +454,11 @@ function StaffPage() {
         </div>
       )}
 
-      {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wardNames} />}
+      {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wards} />}
       {editingNurse && (
         <EditNurseModal
           nurse={editingNurse}
-          wards={wardNames}
+          wards={wards}
           onClose={() => setEditingNurse(null)}
         />
       )}
@@ -547,7 +554,13 @@ function WardMultiField({
   );
 }
 
-function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[] }) {
+function AddNurseModal({
+  onClose,
+  wards,
+}: {
+  onClose: () => void;
+  wards: { name: string; facility: string | null }[];
+}) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [role, setRole] = useState("Nurse");
@@ -556,6 +569,10 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
+  // Only show wards belonging to the selected facility (or untagged wards).
+  const availableWards = (
+    facility ? wards.filter((w) => w.facility === facility || !w.facility) : wards
+  ).map((w) => w.name);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -609,7 +626,10 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             id="nurse-facility"
             title="Facility"
             value={facility}
-            onChange={(e) => setFacility(e.target.value)}
+            onChange={(e) => {
+              setFacility(e.target.value);
+              setNurseWards([]); // clear wards when facility changes
+            }}
             className={inputCls}
           >
             <option value="">— Unassigned —</option>
@@ -623,7 +643,7 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
           </p>
         ) : (
-          <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+          <WardMultiField selectedWards={nurseWards} allWards={availableWards} onChange={setNurseWards} />
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button
@@ -653,7 +673,7 @@ function EditNurseModal({
 }: {
   nurse: Nurse;
   onClose: () => void;
-  wards: string[];
+  wards: { name: string; facility: string | null }[];
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(nurse.name);
@@ -663,6 +683,10 @@ function EditNurseModal({
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
+  // Only show wards belonging to the selected facility (or untagged wards).
+  const availableWards = (
+    facility ? wards.filter((w) => w.facility === facility || !w.facility) : wards
+  ).map((w) => w.name);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -719,7 +743,10 @@ function EditNurseModal({
             id="edit-facility"
             title="Facility"
             value={facility}
-            onChange={(e) => setFacility(e.target.value)}
+            onChange={(e) => {
+              setFacility(e.target.value);
+              setNurseWards([]); // clear wards when facility changes
+            }}
             className={inputCls}
           >
             <option value="">— Unassigned —</option>
@@ -733,7 +760,7 @@ function EditNurseModal({
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
           </p>
         ) : (
-          <WardMultiField selectedWards={nurseWards} allWards={wards} onChange={setNurseWards} />
+          <WardMultiField selectedWards={nurseWards} allWards={availableWards} onChange={setNurseWards} />
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button

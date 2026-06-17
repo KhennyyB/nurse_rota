@@ -363,6 +363,17 @@ function isNurseOrIntern(role: string) {
   return !isNAType(role) && !isHeadOrSupervisor(role);
 }
 
+function stableGroupOffset(group: NurseInput[]): number {
+  if (group.length === 0) return 0;
+  let h = 5381;
+  for (const n of group) {
+    for (let k = 0; k < n.id.length; k++) {
+      h = (((h << 5) + h) ^ n.id.charCodeAt(k)) >>> 0;
+    }
+  }
+  return h % group.length;
+}
+
 function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode[]): ShiftCode {
   const len = cycle.length;
   const blockSize = 4;
@@ -517,13 +528,19 @@ function scheduleCoverageNurses(
   out: DraftAssignment[],
   periodOffset = 0,
 ): void {
+  // Sort by ID so assignments are stable regardless of DB query order.
+  group = [...group].sort((a, b) => a.id.localeCompare(b.id));
   const N = group.length;
   if (N === 0) return;
 
   const periodsElapsed = Math.round(periodOffset / days);
 
+  // Stable seed derived from the group's IDs so period-0 doesn't always
+  // assign NC and MWC duty to the index-0 nurse.
+  const seed = stableGroupOffset(group);
+
   // NC block stagger: nurse `firstNcNurse` leads each period.
-  const firstNcNurse = periodsElapsed % N;
+  const firstNcNurse = (periodsElapsed + seed) % N;
   const maxNcBlocks = Math.min(N, Math.floor(days / 4));
 
   // ncStartDay: nurseIdx → first NC day within this period
@@ -537,17 +554,22 @@ function scheduleCoverageNurses(
   // mwcForcedOff: dateStr (Fri or Mon) → set of nurseIdx forced OFF
   const mwcByDate = new Map<string, number>();
   const mwcForcedOff = new Map<string, Set<number>>();
-  let weekendDutyIdx = (periodsElapsed * 4) % N;
+  let weekendDutyIdx = (periodsElapsed * 4 + seed) % N;
 
   for (let d = 0; d < days; d++) {
     const satDate = new Date(startDate);
     satDate.setDate(satDate.getDate() + d);
     if (satDate.getDay() !== 6) continue; // process each Saturday only
 
-    // Exclude nurses in NC block or post-NC rest (startD … startD+7) on/around Saturday.
+    // Exclude nurses whose NC block or post-NC rest covers Saturday (d) OR Sunday (d+1).
+    // Without the Sunday check, a nurse whose NC starts on Sunday would be assigned
+    // MWC on Saturday but then NC takes over Sunday, giving a one-day MWC instead
+    // of the expected Sat+Sun pair.
     const excluded = new Set<number>();
     for (const [nurseIdx, startD] of ncStartDay) {
-      if (d >= startD && d < startD + 8) excluded.add(nurseIdx);
+      if ((d >= startD && d < startD + 8) || (d + 1 >= startD && d + 1 < startD + 8)) {
+        excluded.add(nurseIdx);
+      }
     }
 
     // Pick MWC nurse: first available non-excluded nurse in duty rotation.
@@ -682,22 +704,24 @@ export function generateSchedule(opts: {
   const internGroupList = [...internsByWard.entries()];
   const numInternGroups = internGroupList.length;
   for (let gi = 0; gi < numInternGroups; gi++) {
-    const [, group] = internGroupList[gi];
+    const [, rawGroup] = internGroupList[gi];
+    // Sort by ID for stable, DB-order-independent phase assignment.
+    const group = [...rawGroup].sort((a, b) => a.id.localeCompare(b.id));
     const stagger =
       numInternGroups > 1 ? Math.round((gi * NURSE_CYCLE.length) / numInternGroups) : 0;
-    for (const intern of group) {
-      scheduleGroup(
-        [intern],
-        NURSE_CYCLE,
-        days,
-        opts.startDate,
-        leave,
-        null, // ward = null → bundled with Coverage Nurses card
-        out,
-        periodOffset + stagger,
-      );
-      scheduled.add(intern.id);
-    }
+    // Schedule interns as a group (not individually) so their phases are staggered
+    // across nurses, mirroring the ward nurse pattern.
+    scheduleGroup(
+      group,
+      NURSE_CYCLE,
+      days,
+      opts.startDate,
+      leave,
+      null,
+      out,
+      periodOffset + stagger,
+    );
+    group.forEach((intern) => scheduled.add(intern.id));
   }
 
   // 3. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
@@ -712,9 +736,20 @@ export function generateSchedule(opts: {
         !isMatron(n.role),
     );
 
-    const supervisors = wardNurses.filter((n) => isWardSupervisor(n.role));
-    const regulars = wardNurses.filter((n) => !isNAType(n.role) && !isWardSupervisor(n.role));
-    const nas = wardNurses.filter((n) => isNAType(n.role));
+    // Sort each sub-group by ID for stable, DB-order-independent scheduling.
+    // A per-group phase seed (multiple of 4 = one full block) is added so that
+    // different ward sub-groups don't all start at the same cycle position.
+    const supervisors = wardNurses
+      .filter((n) => isWardSupervisor(n.role))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const regulars = wardNurses
+      .filter((n) => !isNAType(n.role) && !isWardSupervisor(n.role))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const nas = wardNurses.filter((n) => isNAType(n.role)).sort((a, b) => a.id.localeCompare(b.id));
+
+    const supervisorSeed = stableGroupOffset(supervisors) * 4;
+    const regularSeed = stableGroupOffset(regulars) * 4;
+    const naSeed = stableGroupOffset(nas) * 4;
 
     scheduleGroup(
       supervisors,
@@ -724,10 +759,28 @@ export function generateSchedule(opts: {
       leave,
       ward.name,
       out,
-      periodOffset,
+      periodOffset + supervisorSeed,
     );
-    scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
-    scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
+    scheduleGroup(
+      regulars,
+      NURSE_CYCLE,
+      days,
+      opts.startDate,
+      leave,
+      ward.name,
+      out,
+      periodOffset + regularSeed,
+    );
+    scheduleGroup(
+      nas,
+      NURSE_CYCLE,
+      days,
+      opts.startDate,
+      leave,
+      ward.name,
+      out,
+      periodOffset + naSeed,
+    );
 
     // Only validate safety rules for wards that have staff in this run.
     // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
