@@ -1,8 +1,16 @@
 // Auto-scheduling engine for the 28-day rota.
 //
-// Universal 16-day cycle for ALL roles: 4M → 4OFF → 4N → 4OFF  (4M, 4N, 8OFF)
-//   Coverage nurses additionally get: weekends → MWC, first weekday N → NC (once per period).
-//   Matrons are never auto-scheduled (Mon–Fri mornings only, handled at shift-tracker level).
+// Universal 16-day cycle for ALL roles: 4M → 4OFF → 4N → 4OFF
+//   Offsets are snapped to 4-day block boundaries so every nurse always starts
+//   at the beginning of a block (never mid-block). Nurse 0 → 4M, nurse 1 → 4OFF, etc.
+//
+// Coverage nurses follow a bespoke per-period pattern instead:
+//   NC block : nurse i gets 4 consecutive NC shifts at days [i×4 … i×4+3]
+//              (staggered sequentially across nurses; one block per nurse per period)
+//   MWC      : one nurse rotates weekend duty (Sat+Sun) per weekend; others OFF
+//   All other days: M
+//
+// Matrons are never auto-scheduled (Mon–Fri mornings tracked at shift-page level).
 // Rest rule: N on day d → cannot work M on day d+1.
 
 export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MWC" | "NC";
@@ -354,8 +362,11 @@ function isNurseOrIntern(role: string) {
 
 function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode[]): ShiftCode {
   const len = cycle.length;
-  // Evenly-distributed offsets: avoids duplicate cycle positions when N > len/2.
-  const offset = Math.round((i * len) / N) % len;
+  const blockSize = 4;
+  const numBlocks = Math.floor(len / blockSize);
+  // Snap offset to a 4-day block boundary so every nurse starts at the top of a block.
+  const block = Math.round((i * numBlocks) / N) % numBlocks;
+  const offset = block * blockSize;
   return cycle[(((d + offset) % len) + len) % len];
 }
 
@@ -732,10 +743,21 @@ export interface ScheduleResult {
 /**
  * Schedule coverage nurses (global, not ward-bound).
  *
- * Weekend rule  (Sat / Sun): always MWC — morning weekend coverage.
- * Weekday rule: follow HEAD_NURSE_CYCLE [M, M, N, OFF, OFF].
- *   The very first N position each nurse hits in the 28-day period becomes NC
- *   (night coverage); every subsequent N remains a regular N shift.
+ * NC rotation (continuous across periods):
+ *   Each period the nurse who leads the NC rotation advances by one.
+ *   Period 0 → nurse 0 first, period 1 → nurse 1 first, etc.
+ *   Within each period, blocks are sequential: first-nurse gets days 0–3,
+ *   second-nurse gets days 4–7, and so on.  Each nurse gets exactly one
+ *   4-day NC block per period (capped at floor(days/4) blocks total).
+ *
+ * MWC rotation (continuous across periods):
+ *   28 days = exactly 4 weekends, so weekend duty advances by 4 nurses per period.
+ *   On each Saturday the next available (non-NC) nurse takes MWC for Sat+Sun;
+ *   everyone else is OFF that weekend.  NC takes priority over MWC on weekends.
+ *
+ * Non-NC / non-weekend days:
+ *   Follow the standard NURSE_CYCLE (4M→4OFF→4N→4OFF) with periodOffset
+ *   continuity — same 4-block staggering used by all other roles.
  */
 function scheduleCoverageNurses(
   group: NurseInput[],
@@ -743,14 +765,27 @@ function scheduleCoverageNurses(
   startDate: Date,
   leave: LeaveInput[],
   out: DraftAssignment[],
-  phase = 0,
+  periodOffset = 0,
 ): void {
   const N = group.length;
   if (N === 0) return;
-  const cycle = NURSE_CYCLE;
-  const len = cycle.length;
-  // Track whether each nurse has already received their one NC this period.
-  const ncUsed = new Array<boolean>(N).fill(false);
+
+  // How many complete periods have elapsed?
+  const periodsElapsed = Math.round(periodOffset / days);
+
+  // NC rotation: which nurse leads this period's NC blocks.
+  const firstNcNurse = periodsElapsed % N;
+  const maxNcBlocks = Math.min(N, Math.floor(days / 4));
+
+  // Map nurseIdx → relative start day of their NC block within this period.
+  const ncStartDay = new Map<number, number>();
+  for (let p = 0; p < maxNcBlocks; p++) {
+    ncStartDay.set((firstNcNurse + p) % N, p * 4);
+  }
+
+  // MWC rotation: 4 weekends per 28-day period → advance by 4 nurses per period.
+  let weekendDutyIdx = (periodsElapsed * 4) % N;
+  let currentWeekendMwcNurse = -1;
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
@@ -759,28 +794,40 @@ function scheduleCoverageNurses(
     const dow = date.getDay(); // 0 = Sun, 6 = Sat
     const isWeekend = dow === 0 || dow === 6;
 
+    // Which nurses are in their NC block today?
+    const onNC = new Set<number>();
+    for (const [nurseIdx, startD] of ncStartDay) {
+      if (d >= startD && d < startD + 4) onNC.add(nurseIdx);
+    }
+
+    // Saturday: pick the MWC nurse for this whole weekend (Sat+Sun).
+    // Skip anyone currently on NC; advance the duty pointer for next weekend.
+    if (dow === 6) {
+      currentWeekendMwcNurse = -1;
+      for (let attempt = 0; attempt < N; attempt++) {
+        const candidate = (weekendDutyIdx + attempt) % N;
+        if (!onNC.has(candidate)) {
+          currentWeekendMwcNurse = candidate;
+          weekendDutyIdx = (candidate + 1) % N;
+          break;
+        }
+      }
+    }
+
     for (let i = 0; i < N; i++) {
       if (inLeave(leave, group[i].id, dateStr)) {
         out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift: "LEAVE" });
         continue;
       }
-
       let shift: ShiftCode;
-      if (isWeekend) {
-        shift = "MWC";
+      if (onNC.has(i)) {
+        // NC block takes priority over cycle and weekend rules.
+        shift = "NC";
+      } else if (isWeekend) {
+        shift = i === currentWeekendMwcNurse ? "MWC" : "OFF";
       } else {
-        const offset = Math.round((i * len) / N) % len;
-        const base = cycle[(((d + phase + offset) % len) + len) % len];
-        if (base === "N") {
-          if (!ncUsed[i]) {
-            shift = "NC";
-            ncUsed[i] = true;
-          } else {
-            shift = "N";
-          }
-        } else {
-          shift = base as ShiftCode;
-        }
+        // Regular cycle (M / N / OFF) with period continuity.
+        shift = computeShift(i, periodOffset + d, N, NURSE_CYCLE);
       }
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
     }
