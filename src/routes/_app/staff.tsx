@@ -75,7 +75,7 @@ type Nurse = {
 };
 
 function StaffPage() {
-  const { canManageStaff, canCreateLogin } = useAuth();
+  const { canManageStaff, canCreateLogin, canEditTargetHours } = useAuth();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("");
@@ -303,7 +303,9 @@ function StaffPage() {
                     Facility
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
-                  <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">Hours</th>
+                  <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">
+                    Hours
+                  </th>
                   {canCreateLogin && <th className="text-center font-semibold px-4 py-3">Login</th>}
                   {canManageStaff && (
                     <th className="px-4 py-3">
@@ -339,7 +341,10 @@ function StaffPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
-                      {n.hours_this_month}/{n.target_hours}
+                      <span title={`${n.hours_this_month} worked / ${n.target_hours} target`}>
+                        {n.hours_this_month}
+                        <span className="text-muted-foreground">/{n.target_hours}h</span>
+                      </span>
                     </td>
                     {canCreateLogin && (
                       <td className="px-4 py-3 text-center">
@@ -394,12 +399,19 @@ function StaffPage() {
         </div>
       )}
 
-      {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wardNames} />}
+      {showAdd && (
+        <AddNurseModal
+          onClose={() => setShowAdd(false)}
+          wards={wardNames}
+          canEditTargetHours={canEditTargetHours}
+        />
+      )}
       {editingNurse && (
         <EditNurseModal
           nurse={editingNurse}
           wards={wardNames}
           onClose={() => setEditingNurse(null)}
+          canEditTargetHours={canEditTargetHours}
         />
       )}
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
@@ -488,12 +500,21 @@ function WardMultiField({
   );
 }
 
-function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[] }) {
+function AddNurseModal({
+  onClose,
+  wards,
+  canEditTargetHours,
+}: {
+  onClose: () => void;
+  wards: string[];
+  canEditTargetHours: boolean;
+}) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [role, setRole] = useState("Nurse");
   const [facility, setFacility] = useState("");
   const [nurseWards, setNurseWards] = useState<string[]>([]);
+  const [targetHours, setTargetHours] = useState(160);
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
@@ -506,6 +527,7 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
       role,
       facility: facility || null,
       ward: noWard ? null : formatWards(nurseWards),
+      ...(canEditTargetHours ? { target_hours: targetHours } : {}),
     });
     setBusy(false);
     if (error) return toast.error(error.message);
@@ -559,6 +581,24 @@ function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[
             ))}
           </select>
         </Field>
+        {canEditTargetHours && (
+          <Field
+            id="add-target-hours"
+            label="Target Hours"
+            hint="Monthly target hours for this nurse."
+          >
+            <input
+              id="add-target-hours"
+              type="number"
+              min={0}
+              max={999}
+              title="Target hours per month"
+              value={targetHours}
+              onChange={(e) => setTargetHours(Number(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+        )}
         {noWard ? (
           <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2">
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
@@ -591,16 +631,19 @@ function EditNurseModal({
   nurse,
   onClose,
   wards,
+  canEditTargetHours,
 }: {
   nurse: Nurse;
   onClose: () => void;
   wards: string[];
+  canEditTargetHours: boolean;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(nurse.name);
   const [role, setRole] = useState(nurse.role);
   const [facility, setFacility] = useState(nurse.facility ?? "");
   const [nurseWards, setNurseWards] = useState<string[]>(parseWards(nurse.ward));
+  const [targetHours, setTargetHours] = useState(nurse.target_hours);
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
@@ -615,6 +658,7 @@ function EditNurseModal({
         role,
         facility: facility || null,
         ward: noWard ? null : formatWards(nurseWards),
+        ...(canEditTargetHours ? { target_hours: targetHours } : {}),
       })
       .eq("id", nurse.id);
     setBusy(false);
@@ -669,6 +713,24 @@ function EditNurseModal({
             ))}
           </select>
         </Field>
+        {canEditTargetHours && (
+          <Field
+            id="edit-target-hours"
+            label="Target Hours"
+            hint="Monthly target hours for this nurse."
+          >
+            <input
+              id="edit-target-hours"
+              type="number"
+              min={0}
+              max={999}
+              title="Target hours per month"
+              value={targetHours}
+              onChange={(e) => setTargetHours(Number(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+        )}
         {noWard ? (
           <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2">
             Ward assignment is not applicable for {role}s — their schedule is managed independently.

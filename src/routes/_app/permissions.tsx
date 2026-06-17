@@ -44,6 +44,11 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   { key: "delete_staff", label: "Delete Staff", roles: ["admin"] },
   {
+    key: "edit_target_hours",
+    label: "Set Staff Target Hours",
+    roles: ["admin"],
+  },
+  {
     key: "manage_wards",
     label: "Manage Wards & Staffing Ratios",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],

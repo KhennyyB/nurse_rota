@@ -5,6 +5,19 @@ import { supabase } from "@/integrations/supabase/client";
 
 export type AppRole = "admin" | "cno" | "chief_matron" | "head_nurse" | "hr_admin" | "nurse";
 
+const CAPABILITIES_KEY = "nurse_rota_capabilities";
+
+function capabilityRoles(key: string, defaults: AppRole[]): AppRole[] {
+  try {
+    const raw = localStorage.getItem(CAPABILITIES_KEY);
+    if (!raw) return defaults;
+    const saved = JSON.parse(raw) as { key: string; roles: AppRole[] }[];
+    return saved.find((s) => s.key === key)?.roles ?? defaults;
+  } catch {
+    return defaults;
+  }
+}
+
 interface AuthCtx {
   user: User | null;
   session: Session | null;
@@ -26,6 +39,7 @@ interface AuthCtx {
   canRequestShiftSwitch: boolean;
   canApproveShiftSwitch: boolean;
   canCreateLogin: boolean;
+  canEditTargetHours: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -154,6 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canRequestShiftSwitch: isInActiveRole("admin", "cno"),
     canApproveShiftSwitch: ar === "admin",
     canCreateLogin: ar === "admin",
+    canEditTargetHours: ar !== null && capabilityRoles("edit_target_hours", ["admin"]).includes(ar),
     signOut: async () => {
       if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
       setActiveRole(null);
