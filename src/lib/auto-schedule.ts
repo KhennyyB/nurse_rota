@@ -584,12 +584,14 @@ function scheduleCoverageNurses(
   }
 
   // ── MWC pre-pass ──────────────────────────────────────────────────────────
-  // mwcByDate       : dateStr (Sat or Sun) → nurseIdx on MWC duty
-  // mwcForcedOff    : dateStr (Fri / Mon / Tue / Wed) → set of nurseIdx forced OFF
-  // mwcNurseWeekends: nurseIdx → Saturday d-offsets for all MWC weekends this period
+  // mwcByDate         : dateStr (Sat or Sun) → nurseIdx on MWC duty
+  // mwcForcedOff      : dateStr (Fri / Mon / Tue / Wed) → set of nurseIdx forced OFF
+  // mwcNurseResumeDays: nurseIdx → resume entries (day + cycle offset) per MWC block
   const mwcByDate = new Map<string, number>();
   const mwcForcedOff = new Map<string, Set<number>>();
-  const mwcNurseWeekends = new Map<number, number[]>();
+  // nurseIdx → [{resumeAt, cycleOffset}] for each MWC weekend this period.
+  // cycleOffset 0 → resume M (non-M case); cycleOffset 8 → resume N (M-block case).
+  const mwcNurseResumeDays = new Map<number, Array<{ resumeAt: number; cycleOffset: number }>>();
   let weekendDutyIdx = (periodsElapsed * 4 + seed) % N;
 
   for (let d = 0; d < days; d++) {
@@ -623,13 +625,35 @@ function scheduleCoverageNurses(
       mwcByDate.set(ymd(sunDate), mwcNurse); // Sunday
     }
 
-    if (!mwcNurseWeekends.has(mwcNurse)) mwcNurseWeekends.set(mwcNurse, []);
-    mwcNurseWeekends.get(mwcNurse)!.push(d);
+    // Check the nurse's cycle position on the Friday before MWC to decide how
+    // MWC integrates: if they're in their M block (cycle says M on Friday) the
+    // MWC weekend is absorbed into the M block with no pre-MWC rest day needed.
+    // If they're in an OFF or N block, a Friday rest day is required first.
+    const fridayCycleShift =
+      d > 0 ? computeShift(mwcNurse, periodOffset + (d - 1), N, NURSE_CYCLE) : "OFF";
+    const mBlockOnFriday = fridayCycleShift === "M";
 
-    // Forced OFFs: Friday (d-1) before the weekend, then Mon/Tue/Wed (d+2/3/4) after.
-    // Together with Friday this gives the nurse the full 4 mandatory OFFs around the
-    // MWC weekend: OFF, MWC, MWC, OFF, OFF, OFF.
-    for (const off of [d - 1, d + 2, d + 3, d + 4]) {
+    // resumeAt   : first day the resumed cycle is applied (after all post-MWC OFFs).
+    // cycleOffset: where in NURSE_CYCLE the resumption starts.
+    //   M-block case : nurse completed the morning phase (M+MWC) → resume N block.
+    //                  cycleOffset=8 (N), resumeAt=d+6 (Fri after Mon–Thu OFFs).
+    //   non-M case   : MWC interrupted OFF/N phase → restart from M block.
+    //                  cycleOffset=0 (M), resumeAt=d+5 (Thu after Fri+Mon–Wed OFFs).
+    const cycleOffset = mBlockOnFriday ? 8 : 0;
+    const resumeAt = mBlockOnFriday ? d + 6 : d + 5;
+    if (!mwcNurseResumeDays.has(mwcNurse)) mwcNurseResumeDays.set(mwcNurse, []);
+    mwcNurseResumeDays.get(mwcNurse)!.push({ resumeAt, cycleOffset });
+
+    // Forced OFFs around MWC:
+    //   M-block : no pre-MWC Fri OFF — MWC extends the M block naturally.
+    //             4 OFFs after: Mon(d+2), Tue(d+3), Wed(d+4), Thu(d+5).
+    //             Full pattern: [M…] MWC MWC OFF OFF OFF OFF → N (Fri d+6)
+    //   non-M   : Fri(d-1) OFF + 3 OFFs after = 4 total.
+    //             Full pattern: OFF MWC MWC OFF OFF OFF → M (Thu d+5)
+    const forcedOffDays = mBlockOnFriday
+      ? [d + 2, d + 3, d + 4, d + 5]
+      : [d - 1, d + 2, d + 3, d + 4];
+    for (const off of forcedOffDays) {
       if (off < 0 || off >= days) continue;
       const offDate = new Date(startDate);
       offDate.setDate(offDate.getDate() + off);
@@ -667,7 +691,7 @@ function scheduleCoverageNurses(
       } else if (mwcByDate.get(dateStr) === i) {
         shift = "MWC";
       } else if (mwcForcedOff.get(dateStr)?.has(i)) {
-        // Fri (pre-MWC rest) and Mon/Tue/Wed (post-MWC rest) forced OFFs.
+        // Forced OFFs around MWC weekend (see pre-pass for exact days per case).
         shift = "OFF";
       } else if (inPostNcOff) {
         // Mandatory 4-day rest after the NC block.
@@ -678,17 +702,22 @@ function scheduleCoverageNurses(
         const s = NURSE_CYCLE[(d - (ncStart! + 8)) % CL];
         shift = isWeekend && s === "M" ? "OFF" : s;
       } else {
-        // Compute base shift: post-MWC M-restart or the regular staggered cycle.
+        // Compute base shift: post-MWC resumed cycle or the regular staggered cycle.
+        // cycleOffset 8 → resume N (M-block MWC); cycleOffset 0 → resume M (other).
         let mwcResumeAt: number | undefined;
-        const mwcSats = mwcNurseWeekends.get(i);
-        if (mwcSats) {
-          for (const mwcSat of mwcSats) {
-            if (d >= mwcSat + 5) mwcResumeAt = mwcSat + 5; // Thursday after block
+        let mwcCycleOffset = 0;
+        const resumeEntries = mwcNurseResumeDays.get(i);
+        if (resumeEntries) {
+          for (const entry of resumeEntries) {
+            if (d >= entry.resumeAt) {
+              mwcResumeAt = entry.resumeAt;
+              mwcCycleOffset = entry.cycleOffset;
+            }
           }
         }
         const base =
           mwcResumeAt !== undefined
-            ? NURSE_CYCLE[(d - mwcResumeAt) % CL]
+            ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
             : computeShift(i, periodOffset + d, N, NURSE_CYCLE);
         // Night shifts (N) continue on weekends; only M shifts become OFF.
         shift = isWeekend && base === "M" ? "OFF" : base;
