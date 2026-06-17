@@ -751,33 +751,43 @@ function RotaPage() {
   }
 
   async function handleClear() {
-    if (!confirm("Clear the draft for this 28-day window? Published shifts will be kept.")) return;
+    if (
+      !confirm(
+        "Clear ALL draft shifts in this 28-day window for every ward and job role?\n\n" +
+          "Shifts that have already been submitted for approval, approved, or published will NOT be affected.",
+      )
+    )
+      return;
     setBusy(true);
-    // Clear only ward nurses for the current filter.
-    // Interns are excluded (same protection coverage nurses get from the ward filter)
-    // so that clearing one ward does not wipe intern schedules that are shared across
-    // the first-run and locked in for the whole period.
-    const ids = filteredNurses
-      .filter((n) => !isInternType(n.role) && !isGlobalHead(n.role))
-      .map((n) => n.id);
-    const BATCH = 200;
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const { error } = await supabase
-        .from("shift_assignments")
-        .delete()
-        .gte("shift_date", ymd(startDate))
-        .lte("shift_date", ymd(endDate))
-        .neq("status", "published")
-        .in("nurse_id", ids.slice(i, i + BATCH));
-      if (error) {
-        setBusy(false);
-        return toast.error(error.message);
+    try {
+      // Delete every draft assignment in the period across all nurses / roles / wards.
+      // Only status = 'draft' is removed — submitted, approved and published rows are untouched.
+      const allIds = nurses.map((n) => n.id);
+      const BATCH = 200;
+      for (let i = 0; i < allIds.length; i += BATCH) {
+        const { error } = await supabase
+          .from("shift_assignments")
+          .delete()
+          .gte("shift_date", ymd(startDate))
+          .lte("shift_date", ymd(endDate))
+          .eq("status", "draft")
+          .in("nurse_id", allIds.slice(i, i + BATCH));
+        if (error) throw error;
       }
+      setExtraShifts([]);
+      toast.success("All draft shifts cleared across all wards and roles");
+      await supabase.from("audit_logs").insert({
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+        action: "Cleared all draft shifts",
+        target: `${ymd(startDate)} → ${ymd(endDate)}`,
+      });
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to clear draft");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
-    setExtraShifts([]);
-    toast.success("Draft cleared");
-    qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
   async function handleSubmitRota() {

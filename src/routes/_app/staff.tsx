@@ -15,6 +15,7 @@ import {
   Pencil,
   KeyRound,
   CheckCircle2,
+  Clock,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { adminCreateUser } from "@/integrations/supabase/admin-client";
@@ -83,6 +84,7 @@ function StaffPage() {
   const [filterWard, setFilterWard] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [showSetHours, setShowSetHours] = useState(false);
   const [editingNurse, setEditingNurse] = useState<Nurse | null>(null);
   const [createLoginNurse, setCreateLoginNurse] = useState<Nurse | null>(null);
 
@@ -157,25 +159,37 @@ function StaffPage() {
         title="Nursing Staff"
         subtitle={`${nurses.length} nurse${nurses.length === 1 ? "" : "s"} registered`}
         actions={
-          canManageStaff && (
-            <>
+          <>
+            {canEditTargetHours && (
               <button
                 type="button"
-                onClick={() => setShowUpload(true)}
+                onClick={() => setShowSetHours(true)}
                 className="inline-flex items-center gap-2 h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted"
               >
-                <Upload className="h-4 w-4" />{" "}
-                <span className="hidden sm:inline">Upload Excel</span>
+                <Clock className="h-4 w-4" />
+                <span className="hidden sm:inline">Set Target Hours</span>
               </button>
-              <button
-                type="button"
-                onClick={() => setShowAdd(true)}
-                className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
-              >
-                <UserPlus className="h-4 w-4" /> Add nurse
-              </button>
-            </>
-          )
+            )}
+            {canManageStaff && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowUpload(true)}
+                  className="inline-flex items-center gap-2 h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                >
+                  <Upload className="h-4 w-4" />{" "}
+                  <span className="hidden sm:inline">Upload Excel</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAdd(true)}
+                  className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+                >
+                  <UserPlus className="h-4 w-4" /> Add nurse
+                </button>
+              </>
+            )}
+          </>
         }
       />
 
@@ -399,19 +413,18 @@ function StaffPage() {
         </div>
       )}
 
-      {showAdd && (
-        <AddNurseModal
-          onClose={() => setShowAdd(false)}
-          wards={wardNames}
-          canEditTargetHours={canEditTargetHours}
-        />
-      )}
+      {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wardNames} />}
       {editingNurse && (
         <EditNurseModal
           nurse={editingNurse}
           wards={wardNames}
           onClose={() => setEditingNurse(null)}
-          canEditTargetHours={canEditTargetHours}
+        />
+      )}
+      {showSetHours && (
+        <SetTargetHoursModal
+          currentHours={nurses[0]?.target_hours ?? 160}
+          onClose={() => setShowSetHours(false)}
         />
       )}
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
@@ -500,21 +513,12 @@ function WardMultiField({
   );
 }
 
-function AddNurseModal({
-  onClose,
-  wards,
-  canEditTargetHours,
-}: {
-  onClose: () => void;
-  wards: string[];
-  canEditTargetHours: boolean;
-}) {
+function AddNurseModal({ onClose, wards }: { onClose: () => void; wards: string[] }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [role, setRole] = useState("Nurse");
   const [facility, setFacility] = useState("");
   const [nurseWards, setNurseWards] = useState<string[]>([]);
-  const [targetHours, setTargetHours] = useState(160);
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
@@ -527,7 +531,6 @@ function AddNurseModal({
       role,
       facility: facility || null,
       ward: noWard ? null : formatWards(nurseWards),
-      ...(canEditTargetHours ? { target_hours: targetHours } : {}),
     });
     setBusy(false);
     if (error) return toast.error(error.message);
@@ -581,24 +584,6 @@ function AddNurseModal({
             ))}
           </select>
         </Field>
-        {canEditTargetHours && (
-          <Field
-            id="add-target-hours"
-            label="Target Hours"
-            hint="Monthly target hours for this nurse."
-          >
-            <input
-              id="add-target-hours"
-              type="number"
-              min={0}
-              max={999}
-              title="Target hours per month"
-              value={targetHours}
-              onChange={(e) => setTargetHours(Number(e.target.value))}
-              className={inputCls}
-            />
-          </Field>
-        )}
         {noWard ? (
           <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2">
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
@@ -631,19 +616,16 @@ function EditNurseModal({
   nurse,
   onClose,
   wards,
-  canEditTargetHours,
 }: {
   nurse: Nurse;
   onClose: () => void;
   wards: string[];
-  canEditTargetHours: boolean;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(nurse.name);
   const [role, setRole] = useState(nurse.role);
   const [facility, setFacility] = useState(nurse.facility ?? "");
   const [nurseWards, setNurseWards] = useState<string[]>(parseWards(nurse.ward));
-  const [targetHours, setTargetHours] = useState(nurse.target_hours);
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
@@ -658,7 +640,6 @@ function EditNurseModal({
         role,
         facility: facility || null,
         ward: noWard ? null : formatWards(nurseWards),
-        ...(canEditTargetHours ? { target_hours: targetHours } : {}),
       })
       .eq("id", nurse.id);
     setBusy(false);
@@ -713,24 +694,6 @@ function EditNurseModal({
             ))}
           </select>
         </Field>
-        {canEditTargetHours && (
-          <Field
-            id="edit-target-hours"
-            label="Target Hours"
-            hint="Monthly target hours for this nurse."
-          >
-            <input
-              id="edit-target-hours"
-              type="number"
-              min={0}
-              max={999}
-              title="Target hours per month"
-              value={targetHours}
-              onChange={(e) => setTargetHours(Number(e.target.value))}
-              className={inputCls}
-            />
-          </Field>
-        )}
         {noWard ? (
           <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2">
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
@@ -909,6 +872,78 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+    </Modal>
+  );
+}
+
+function SetTargetHoursModal({
+  currentHours,
+  onClose,
+}: {
+  currentHours: number;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [hours, setHours] = useState(currentHours);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (
+      !confirm(
+        `Set target hours to ${hours}h for ALL nurses in the system?\n\nThis will overwrite each nurse's current target.`,
+      )
+    )
+      return;
+    setBusy(true);
+    const { error } = await supabase
+      .from("nurses")
+      .update({ target_hours: hours })
+      .gte("target_hours", 0);
+    setBusy(false);
+    if (error) return toast.error(error.message);
+    toast.success(`Target hours updated to ${hours}h for all staff`);
+    logAudit("Updated global target hours", `${hours}h`);
+    qc.invalidateQueries({ queryKey: ["nurses"] });
+    onClose();
+  }
+
+  return (
+    <Modal title="Set Target Hours" onClose={onClose}>
+      <p className="text-sm text-muted-foreground mb-4">
+        Sets the monthly target hours for <strong>all nurses</strong> in the system. This will
+        overwrite each nurse's current target.
+      </p>
+      <form onSubmit={submit} className="space-y-4">
+        <Field id="global-target-hours" label="Target Hours (monthly)">
+          <input
+            id="global-target-hours"
+            type="number"
+            min={1}
+            max={999}
+            title="Monthly target hours for all staff"
+            value={hours}
+            onChange={(e) => setHours(Number(e.target.value))}
+            className={inputCls}
+          />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={busy || hours < 1}
+            type="submit"
+            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-3 w-3 animate-spin" />} Apply to all staff
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }
