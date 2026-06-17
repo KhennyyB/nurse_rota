@@ -794,6 +794,8 @@ function RotaPage() {
         target: `${ymd(startDate)} → ${ymd(endDate)}`,
       });
       qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
+      window.location.reload();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to clear draft");
     } finally {
@@ -805,6 +807,7 @@ function RotaPage() {
     setBusy(true);
     // Submit only the currently filtered nurses so that selecting "IP Ward" and
     // clicking Submit does not also submit ICU, NICU, etc. in the same period.
+    // Coverage nurses (isGlobalHead) always pass the ward filter and are included.
     const ids = filteredNurses.map((n) => n.id);
     const BATCH = 200;
     for (let i = 0; i < ids.length; i += BATCH) {
@@ -820,6 +823,43 @@ function RotaPage() {
         return toast.error(error.message);
       }
     }
+
+    // When a specific ward is selected, also co-submit interns assigned to other
+    // wards. Intern assignments are stored with ward = null (same pool as coverage
+    // nurses) so they are independent of any ward's approval pipeline.
+    // Coverage nurses are already in filteredNurses via isGlobalHead pass-through;
+    // only interns from non-selected wards are missing.
+    if (selectedWard) {
+      const submittedIdSet = new Set(ids);
+      // Resolve the facility from the selected-facility filter or from a ward nurse.
+      const facility =
+        selectedFacility ||
+        nurses.find(
+          (n) =>
+            !isGlobalHead(n.role) &&
+            !isInternType(n.role) &&
+            parseWards(n.ward).includes(selectedWard),
+        )?.facility ||
+        null;
+      const otherInternIds = nurses
+        .filter(
+          (n) =>
+            isInternType(n.role) &&
+            !submittedIdSet.has(n.id) &&
+            (!facility || n.facility === facility),
+        )
+        .map((n) => n.id);
+      for (let i = 0; i < otherInternIds.length; i += BATCH) {
+        await supabase
+          .from("shift_assignments")
+          .update({ status: "submitted" })
+          .gte("shift_date", ymd(startDate))
+          .lte("shift_date", ymd(endDate))
+          .eq("status", "draft")
+          .in("nurse_id", otherInternIds.slice(i, i + BATCH));
+      }
+    }
+
     setBusy(false);
     const wardLabel = selectedWard || selectedFacility || "all wards";
     await supabase.from("audit_logs").insert({

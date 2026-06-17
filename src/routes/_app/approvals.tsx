@@ -20,7 +20,7 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { isGlobalHead } from "@/lib/auto-schedule";
+import { isGlobalHead, isInternType } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -323,8 +323,37 @@ function ApprovalsPage() {
       .lte("shift_date", win.endDate)
       .eq("status", "draft");
     const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
+    if (error) {
+      setBusy(null);
+      return toast.error(error.message);
+    }
+
+    // When a ward window is submitted, co-submit coverage nurses and interns for
+    // the same facility whose assignments still sit at draft (ward = null in DB).
+    if (win.ward !== null) {
+      const winNurseIds = new Set(
+        rows
+          .filter(
+            (r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate && r.ward === win.ward,
+          )
+          .map((r) => r.nurse_id),
+      );
+      const facility = allNurses.find((n) => winNurseIds.has(n.id))?.facility ?? null;
+      const globalIds = allNurses
+        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role)))
+        .map((n) => n.id);
+      for (let i = 0; i < globalIds.length; i += 200) {
+        await supabase
+          .from("shift_assignments")
+          .update({ status: "submitted" })
+          .gte("shift_date", win.startDate)
+          .lte("shift_date", win.endDate)
+          .eq("status", "draft")
+          .in("nurse_id", globalIds.slice(i, i + 200));
+      }
+    }
+
     setBusy(null);
-    if (error) return toast.error(error.message);
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
@@ -355,8 +384,39 @@ function ApprovalsPage() {
         .eq("status", win.status);
     const base = nextStatus === "published" ? buildBase("published") : buildExact();
     const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
+    if (error) {
+      setBusy(null);
+      return toast.error(error.message);
+    }
+
+    // When publishing a ward window, also publish the coverage nurses and intern
+    // assignments (ward = null) for the same facility so they become available
+    // for print and export alongside the ward schedule.
+    if (nextStatus === "published" && win.ward !== null) {
+      const winNurseIds = new Set(
+        rows
+          .filter(
+            (r) =>
+              r.shift_date >= win.startDate && r.shift_date <= win.endDate && r.ward === win.ward,
+          )
+          .map((r) => r.nurse_id),
+      );
+      const facility = allNurses.find((n) => winNurseIds.has(n.id))?.facility ?? null;
+      const globalIds = allNurses
+        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role)))
+        .map((n) => n.id);
+      for (let i = 0; i < globalIds.length; i += 200) {
+        await supabase
+          .from("shift_assignments")
+          .update({ status: "published" })
+          .gte("shift_date", win.startDate)
+          .lte("shift_date", win.endDate)
+          .neq("status", "published")
+          .in("nurse_id", globalIds.slice(i, i + 200));
+      }
+    }
+
     setBusy(null);
-    if (error) return toast.error(error.message);
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
@@ -430,7 +490,7 @@ function ApprovalsPage() {
     let scopedNurses: NurseRow[] = allNurses as NurseRow[];
     if (facility) scopedNurses = scopedNurses.filter((n) => n.facility === facility);
     if (scope === "__HEAD__") {
-      scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role));
+      scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role) || isInternType(n.role));
     } else if (scope) {
       scopedNurses = scopedNurses.filter(
         (n) => !isGlobalHead(n.role) && parseWards(n.ward)[0] === scope,

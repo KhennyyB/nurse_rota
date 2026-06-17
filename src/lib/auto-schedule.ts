@@ -12,7 +12,9 @@
 //   Post-NC+  : resume NURSE_CYCLE from position 0 (4M → 4OFF → 4N …)
 //   Pre-NC    : NURSE_CYCLE from staggered 4-block phase (same as all other roles)
 //   MWC       : one nurse per weekend rotates Sat+Sun MWC, others OFF on weekends
-//   Fri/Mon   : forced OFF for the MWC nurse (rest before and after the weekend)
+//   Fri/Mon/Tue/Wed : 4 forced OFFs for the MWC nurse (1 before + 3 after),
+//               giving the full OFF entitlement: OFF, MWC, MWC, OFF, OFF, OFF
+//   Post-MWC+ : resume NURSE_CYCLE from position 0 (4M → 4OFF → 4N …)
 //
 // Matrons are never auto-scheduled (Mon–Fri mornings tracked at shift-page level).
 
@@ -550,10 +552,12 @@ function scheduleCoverageNurses(
   }
 
   // Pre-compute MWC duty assignments and surrounding forced OFFs.
-  // mwcByDate   : dateStr (Sat or Sun) → nurseIdx on MWC duty
-  // mwcForcedOff: dateStr (Fri or Mon) → set of nurseIdx forced OFF
+  // mwcByDate       : dateStr (Sat or Sun) → nurseIdx on MWC duty
+  // mwcForcedOff    : dateStr (Fri / Mon / Tue / Wed) → set of nurseIdx forced OFF
+  // mwcNurseWeekends: nurseIdx → array of Saturday d-offsets for all MWC weekends
   const mwcByDate = new Map<string, number>();
   const mwcForcedOff = new Map<string, Set<number>>();
+  const mwcNurseWeekends = new Map<number, number[]>();
   let weekendDutyIdx = (periodsElapsed * 4 + seed) % N;
 
   for (let d = 0; d < days; d++) {
@@ -592,22 +596,20 @@ function scheduleCoverageNurses(
       mwcByDate.set(ymd(sunDate), mwcNurse); // Sunday
     }
 
-    // Friday before Saturday: forced OFF for MWC nurse
-    if (d > 0) {
-      const friDate = new Date(startDate);
-      friDate.setDate(friDate.getDate() + d - 1);
-      const friStr = ymd(friDate);
-      if (!mwcForcedOff.has(friStr)) mwcForcedOff.set(friStr, new Set());
-      mwcForcedOff.get(friStr)!.add(mwcNurse);
-    }
+    // Track this Saturday for post-MWC cycle resumption.
+    if (!mwcNurseWeekends.has(mwcNurse)) mwcNurseWeekends.set(mwcNurse, []);
+    mwcNurseWeekends.get(mwcNurse)!.push(d);
 
-    // Monday after Sunday: forced OFF for MWC nurse
-    if (d + 2 < days) {
-      const monDate = new Date(startDate);
-      monDate.setDate(monDate.getDate() + d + 2);
-      const monStr = ymd(monDate);
-      if (!mwcForcedOff.has(monStr)) mwcForcedOff.set(monStr, new Set());
-      mwcForcedOff.get(monStr)!.add(mwcNurse);
+    // Forced OFFs: Friday (d-1) before the weekend, then Mon/Tue/Wed (d+2/3/4)
+    // after it. Together with Friday this gives the nurse the full 4 mandatory OFFs
+    // that the cycle demands, completing the pattern: OFF, MWC, MWC, OFF, OFF, OFF.
+    for (const off of [d - 1, d + 2, d + 3, d + 4]) {
+      if (off < 0 || off >= days) continue;
+      const offDate = new Date(startDate);
+      offDate.setDate(offDate.getDate() + off);
+      const offStr = ymd(offDate);
+      if (!mwcForcedOff.has(offStr)) mwcForcedOff.set(offStr, new Set());
+      mwcForcedOff.get(offStr)!.add(mwcNurse);
     }
   }
 
@@ -646,8 +648,21 @@ function scheduleCoverageNurses(
         // Resume NURSE_CYCLE from position 0 (4M → 4OFF → 4N …) after NC + rest
         shift = NURSE_CYCLE[(d - (ncStart! + 8)) % NURSE_CYCLE.length];
       } else {
-        // Pre-NC days and non-NC nurses: strict 4-block NURSE_CYCLE with phase continuity
-        shift = computeShift(i, periodOffset + d, N, NURSE_CYCLE);
+        // After an MWC block (OFF,MWC,MWC,OFF,OFF,OFF) resume from M, mirroring
+        // the post-NC restart. Use the most-recent completed MWC Saturday as anchor.
+        let mwcResumeAt: number | undefined;
+        const mwcSats = mwcNurseWeekends.get(i);
+        if (mwcSats) {
+          for (const mwcSat of mwcSats) {
+            if (d >= mwcSat + 5) mwcResumeAt = mwcSat + 5; // Thursday after block
+          }
+        }
+        if (mwcResumeAt !== undefined) {
+          shift = NURSE_CYCLE[(d - mwcResumeAt) % NURSE_CYCLE.length];
+        } else {
+          // Pre-MWC or no MWC duty: strict 4-block NURSE_CYCLE with phase continuity
+          shift = computeShift(i, periodOffset + d, N, NURSE_CYCLE);
+        }
       }
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });

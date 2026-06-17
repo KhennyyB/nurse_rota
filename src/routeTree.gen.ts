@@ -260,18 +260,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppReportsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/menu-permissions': {
-      id: '/_app/menu-permissions'
-      path: '/menu-permissions'
-      fullPath: '/menu-permissions'
-      preLoaderRoute: typeof AppMenuPermissionsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/permissions': {
       id: '/_app/permissions'
       path: '/permissions'
       fullPath: '/permissions'
       preLoaderRoute: typeof AppPermissionsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/menu-permissions': {
+      id: '/_app/menu-permissions'
+      path: '/menu-permissions'
+      fullPath: '/menu-permissions'
+      preLoaderRoute: typeof AppMenuPermissionsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/leave': {
