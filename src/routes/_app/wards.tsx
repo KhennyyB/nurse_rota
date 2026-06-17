@@ -102,14 +102,15 @@ function WardsPage() {
         ...IKOYI_WARD_MINIMUMS[name],
       }));
 
-      // Insert all; on name conflict update the staffing numbers so the DB
+      // Insert all; on name+facility conflict update the staffing numbers so the DB
       // always reflects the correct hardcoded values.
       for (const row of rows) {
-        const existing = wards.find((w) => w.name === row.name);
+        const existing = wards.find((w) => w.name === row.name && w.facility === "Ikoyi");
         if (existing) {
           const { error } = await supabase
             .from("wards")
             .update({
+              facility: "Ikoyi",
               min_morning_nurses: row.min_morning_nurses,
               min_morning_supervisor: row.min_morning_supervisor,
               min_morning_na: row.min_morning_na,

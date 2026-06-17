@@ -368,13 +368,16 @@ function RotaPage() {
   });
 
   const { data: genWards = [] } = useQuery<WardInput[]>({
-    queryKey: ["wards-by-facility", genForm.facility],
+    queryKey: ["gen-wards", genForm.facility],
     queryFn: async () => {
       let q = supabase.from("wards").select("*").order("name");
-      if (genForm.facility) q = q.eq("facility", genForm.facility);
+      if (genForm.facility) {
+        // Include wards explicitly tagged to this facility AND wards with no facility tag
+        // (older records may not have facility set yet).
+        q = q.or(`facility.eq.${genForm.facility},facility.is.null`);
+      }
       return ((await q).data ?? []) as WardInput[];
     },
-    enabled: !!genForm.facility,
   });
 
   const leaveConflicts = useMemo(() => {
@@ -566,7 +569,13 @@ function RotaPage() {
       // Pass only the wards relevant to this run so safety-rule violations are
       // scoped correctly: a ward-specific run (e.g. "IP Ward") should only
       // report violations for IP Ward, not for every other ward in the facility.
-      const facilityWards = genWards.filter((w) => !genForm.ward || w.name === genForm.ward);
+      // Prefer facility-tagged records; also accept untagged wards (facility = null)
+      // so older records without a facility field still participate in enforcement.
+      const facilityWards = genWards.filter(
+        (w) =>
+          (!genForm.ward || w.name === genForm.ward) &&
+          (!w.facility || w.facility === genForm.facility),
+      );
 
       // Find the earliest ever-scheduled day for this facility so the cycle
       // phases continue seamlessly across 28-day periods.
@@ -602,20 +611,22 @@ function RotaPage() {
         periodOffset,
       });
 
-      // Safety-rule gate: if the ward's minimums cannot be met with the
-      // current staff, block generation and tell the user what's short.
+      // Safety-rule check: if the ward's minimums cannot be met with the
+      // current staff, show a warning but still save the schedule.
+      // With the strict 4M→4OFF→4N→4OFF cycle only ¼ of nurses are on M/N
+      // at any one time, so high minimums can only be met with a large enough
+      // roster — blocking generation entirely would prevent saving the rota.
       if (violations.length > 0) {
-        // Summarise by ward + role + shift (don't list every single day)
         const summary = summariseViolations(violations);
         const lines = summary.map(
           (v) =>
-            `• ${v.ward} — ${v.shift === "M" ? "Morning" : "Night"} ${v.role}: need ${v.required}, only ${v.actual} available`,
+            `• ${v.ward} — ${v.shift === "M" ? "Morning" : "Night"} ${v.role}: need ${v.required}, have ${v.actual}`,
         );
-        toast.error(
-          `Cannot generate — safety rules not met:\n${lines.join("\n")}\n\nAdd more staff to meet the ward minimums, then regenerate.`,
-          { duration: 10000 },
+        toast.warning(
+          `Schedule saved with staffing shortfalls:\n${lines.join("\n")}`,
+          { duration: 8000 },
         );
-        return;
+        // Do NOT return — continue saving the draft
       }
 
       // Scope the delete to only the nurses being regenerated in this run.
