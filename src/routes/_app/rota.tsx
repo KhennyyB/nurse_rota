@@ -60,7 +60,7 @@ export const Route = createFileRoute("/_app/rota")({
 });
 
 const DAYS = 28;
-const SHIFT_CYCLE: ShiftCode[] = ["M", "N", "OFF", "LEAVE"];
+const SHIFT_CYCLE: ShiftCode[] = ["M", "N", "MC", "NC", "WC", "OFF", "LEAVE"];
 const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"];
 
 const shiftStyles: Record<ShiftCode, string> = {
@@ -68,6 +68,9 @@ const shiftStyles: Record<ShiftCode, string> = {
   N: "bg-indigo-200 text-indigo-900 border-indigo-300",
   OFF: "bg-muted text-muted-foreground border-transparent",
   LEAVE: "bg-rose-100 text-rose-900 border-rose-200",
+  MC: "bg-emerald-100 text-emerald-900 border-emerald-200",
+  NC: "bg-purple-200 text-purple-900 border-purple-300",
+  WC: "bg-cyan-100 text-cyan-900 border-cyan-200",
 };
 
 function parseWards(ward: string | null): string[] {
@@ -244,12 +247,6 @@ function RotaPage() {
       ((await supabase.from("nurses").select("*").order("name")).data ?? []) as NurseInput[],
   });
 
-  const { data: wards = [] } = useQuery<WardInput[]>({
-    queryKey: ["wards"],
-    queryFn: async () =>
-      ((await supabase.from("wards").select("*").order("name")).data ?? []) as WardInput[],
-  });
-
   const { data: leave = [] } = useQuery<LeaveInput[]>({
     queryKey: ["leave"],
     queryFn: async () =>
@@ -297,12 +294,17 @@ function RotaPage() {
     return m;
   }, [assignments]);
 
-  // Total scheduled hours per nurse for the current period (M=8 h, N=14 h).
+  // Total scheduled hours per nurse for the current period.
   const nurseScheduledHours = useMemo(() => {
     const m = new Map<string, number>();
     assignments.forEach((a) => {
-      if (a.shift === "M") m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + SHIFT_TIMES.M.hours);
-      else if (a.shift === "N") m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + SHIFT_TIMES.N.hours);
+      const h =
+        a.shift === "M" || a.shift === "MC" || a.shift === "WC"
+          ? SHIFT_TIMES.M.hours
+          : a.shift === "N" || a.shift === "NC"
+            ? SHIFT_TIMES.N.hours
+            : 0;
+      if (h) m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + h);
     });
     return m;
   }, [assignments]);
@@ -1405,8 +1407,11 @@ function RotaPage() {
 
 function Legend() {
   const items: { code: ShiftCode; label: string; time: string }[] = [
-    { code: "M", label: "Morning", time: "08:00–16:00" },
-    { code: "N", label: "Night", time: "17:00–07:00" },
+    { code: "M", label: "Morning", time: "08:00–17:00" },
+    { code: "N", label: "Night", time: "17:00–08:00" },
+    { code: "MC", label: "Morning Coverage", time: "08:00–17:00" },
+    { code: "NC", label: "Night Coverage", time: "17:00–08:00" },
+    { code: "WC", label: "Weekend Coverage", time: "08:00–17:00" },
     { code: "OFF", label: "Off", time: "" },
     { code: "LEAVE", label: "Leave", time: "" },
   ];

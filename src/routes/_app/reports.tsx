@@ -446,11 +446,9 @@ function ReportsPage() {
                           <div key={type} className="flex items-center gap-3 text-sm">
                             <span className="w-36 truncate font-medium">{type}</span>
                             <div className="flex-1 h-4 rounded-full bg-muted overflow-hidden">
-                              <div
-                                className="h-full bg-primary/70 rounded-full"
-                                style={{
-                                  width: `${Math.round((count / leaveOnly.length) * 100)}%`,
-                                }}
+                              <Progress
+                                value={Math.round((count / leaveOnly.length) * 100)}
+                                className="h-full rounded-full bg-primary/70"
                               />
                             </div>
                             <span className="w-8 text-right tabular-nums text-muted-foreground text-xs">

@@ -231,7 +231,7 @@ function NurseDashboard() {
 
   const periodHours = periodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
   const totalMinutes = Math.round(periodHours * 60);
-  const targetHours = nurseRecord?.target_hours ?? 160;
+  const targetHours = nurseRecord?.target_hours ?? 185;
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
   const completedShiftCount = periodLogs.filter((l) => l.hours_logged !== null).length;
 
@@ -247,7 +247,7 @@ function NurseDashboard() {
     OFF: "bg-muted text-muted-foreground border-transparent",
     LEAVE: "bg-rose-100 text-rose-800 border-rose-200",
   };
-  const shiftTime: Record<string, string> = { M: "08:00 – 16:00", N: "17:00 – 07:00" };
+  const shiftTime: Record<string, string> = { M: "08:00 – 17:00", N: "17:00 – 08:00" };
 
   const isShiftActive = activeLog?.ended_at == null;
   const elapsedMs =

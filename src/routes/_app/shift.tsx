@@ -84,12 +84,12 @@ function fmtHours(decHours: number) {
 function calcExpectedEnd(shiftType: "M" | "N", startedAt: Date): Date {
   const d = new Date(startedAt);
   if (shiftType === "M") {
-    d.setHours(16, 0, 0, 0);
-    // If started after 16:00 (late start) add a day grace
+    d.setHours(17, 0, 0, 0);
+    // If started after 17:00 (late start) add a day grace
     if (d <= startedAt) d.setDate(d.getDate() + 1);
   } else {
     d.setDate(d.getDate() + 1);
-    d.setHours(7, 0, 0, 0);
+    d.setHours(8, 0, 0, 0);
   }
   return d;
 }
@@ -353,7 +353,7 @@ function ShiftPage() {
               <p className="text-2xl font-bold mt-1">
                 {assignment.shift === "M" ? "Morning Shift" : "Night Shift"}
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  {assignment.shift === "M" ? "08:00 – 16:00" : "17:00 – 07:00"}
+                  {assignment.shift === "M" ? "08:00 – 17:00" : "17:00 – 08:00"}
                 </span>
               </p>
             ) : (
@@ -801,7 +801,7 @@ function AllNursesShiftView() {
               const hrs = hoursMap.get(n.id) ?? 0;
               const shifts = shiftsMap.get(n.id) ?? 0;
               const lateCount = lateMap.get(n.id) ?? 0;
-              const target = n.target_hours || 160;
+              const target = n.target_hours || 185;
               const pct = Math.min(Math.round((hrs / target) * 100), 100);
               const isActive = activeMap.get(n.id) ?? false;
               return (

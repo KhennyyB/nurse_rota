@@ -1,17 +1,21 @@
 // Auto-scheduling engine for the 28-day rota.
 //
-// Nurse cycle (12-day): M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF  (3M, 3N, 6OFF)
+// Nurse cycle (16-day): 4M → 4OFF → 4N → 4OFF  (4M, 4N, 8OFF)
 // Coverage Nurse cycle (5-day): M→M→N→OFF→OFF  (2M, 1N, 2 consecutive OFF days)
+//   Coverage nurses may also be assigned MC, WC, or NC instead of M/N/OFF.
 // NA cycle (6-day): M→M→M→N→OFF→OFF  (3M, 1N, 2OFF — morning-biased base; enforceMinima tops up night)
 // Ward Supervisor cycle (4-day): M→M→M→OFF  (mornings only, non-Ikoyi)
 // Intern Nurses: NURSE_CYCLE, same phase per ward so all interns share equal M/N/OFF counts.
 // Rest rule: N on day d → cannot work M on day d+1.
 
-export type ShiftCode = "M" | "N" | "OFF" | "LEAVE";
+export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MC" | "WC" | "NC";
 
 export const SHIFT_TIMES = {
-  M: { start: "08:00", end: "16:00", hours: 8, label: "Morning" },
-  N: { start: "17:00", end: "07:00", hours: 14, label: "Night" },
+  M: { start: "08:00", end: "17:00", hours: 9, label: "Morning" },
+  N: { start: "17:00", end: "08:00", hours: 15, label: "Night" },
+  MC: { start: "08:00", end: "17:00", hours: 9, label: "Morning Coverage" },
+  NC: { start: "17:00", end: "08:00", hours: 15, label: "Night Coverage" },
+  WC: { start: "08:00", end: "17:00", hours: 9, label: "Weekend Coverage" },
 } as const;
 
 export interface NurseInput {
@@ -58,20 +62,24 @@ export interface SafetyViolation {
   actual: number;
 }
 
-// 12-day cycle: 3M + 3N + 6OFF, arranged so every N is followed by at least one
-// OFF (never directly by M). Pattern: M→N→OFF→OFF→M→OFF→N→OFF→OFF→M→N→OFF.
+// 16-day cycle: 4M → 4OFF → 4N → 4OFF. Every N block is followed by 4 OFF days
+// so the rest rule (no M the day after N) is always satisfied.
 const NURSE_CYCLE: readonly ShiftCode[] = [
   "M",
-  "N",
-  "OFF",
-  "OFF",
+  "M",
+  "M",
   "M",
   "OFF",
+  "OFF",
+  "OFF",
+  "OFF",
+  "N",
+  "N",
+  "N",
   "N",
   "OFF",
   "OFF",
-  "M",
-  "N",
+  "OFF",
   "OFF",
 ];
 

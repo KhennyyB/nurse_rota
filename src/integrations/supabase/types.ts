@@ -421,7 +421,7 @@ export type Database = {
       assignment_status: "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
       leave_status: "Pending" | "Approved" | "Rejected";
       leave_type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap";
-      shift_code: "M" | "N" | "OFF" | "LEAVE";
+      shift_code: "M" | "N" | "OFF" | "LEAVE" | "MC" | "WC" | "NC";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -551,7 +551,7 @@ export const Constants = {
       assignment_status: ["draft", "submitted", "approved_chief", "approved_cno", "published"],
       leave_status: ["Pending", "Approved", "Rejected"],
       leave_type: ["Sick", "Annual", "Emergency", "Public Holiday", "Swap"],
-      shift_code: ["M", "N", "OFF", "LEAVE"],
+      shift_code: ["M", "N", "OFF", "LEAVE", "MC", "WC", "NC"],
     },
   },
 } as const;
