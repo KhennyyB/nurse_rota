@@ -1,21 +1,18 @@
 // Auto-scheduling engine for the 28-day rota.
 //
-// Nurse cycle (16-day): 4M → 4OFF → 4N → 4OFF  (4M, 4N, 8OFF)
-// Coverage Nurse cycle (5-day): M→M→N→OFF→OFF  (2M, 1N, 2 consecutive OFF days)
-//   Coverage nurses may also be assigned MC, WC, or NC instead of M/N/OFF.
-// NA cycle (6-day): M→M→M→N→OFF→OFF  (3M, 1N, 2OFF — morning-biased base; enforceMinima tops up night)
-// Ward Supervisor cycle (4-day): M→M→M→OFF  (mornings only, non-Ikoyi)
-// Intern Nurses: NURSE_CYCLE, same phase per ward so all interns share equal M/N/OFF counts.
+// Universal 16-day cycle for ALL roles: 4M → 4OFF → 4N → 4OFF  (4M, 4N, 8OFF)
+//   Coverage nurses additionally get: weekends → MWC, first weekday N → NC (once per period).
+//   Matrons are never auto-scheduled (Mon–Fri mornings only, handled at shift-tracker level).
 // Rest rule: N on day d → cannot work M on day d+1.
 
-export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MC" | "WC" | "NC";
+export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MC" | "MWC" | "NC";
 
 export const SHIFT_TIMES = {
   M: { start: "08:00", end: "17:00", hours: 9, label: "Morning" },
   N: { start: "17:00", end: "08:00", hours: 15, label: "Night" },
   MC: { start: "08:00", end: "17:00", hours: 9, label: "Morning Coverage" },
   NC: { start: "17:00", end: "08:00", hours: 15, label: "Night Coverage" },
-  WC: { start: "08:00", end: "17:00", hours: 9, label: "Weekend Coverage" },
+  MWC: { start: "08:00", end: "17:00", hours: 9, label: "Morning Weekend Coverage" },
 } as const;
 
 export interface NurseInput {
@@ -82,22 +79,6 @@ const NURSE_CYCLE: readonly ShiftCode[] = [
   "OFF",
   "OFF",
 ];
-
-// 5-day cycle for Coverage Nurses: 2M + 1N + 2 consecutive OFF days.
-// Pattern: M→M→N→OFF→OFF. Night always followed by OFF ✓; no N→M.
-// Wraparound: OFF→M ✓.
-const HEAD_NURSE_CYCLE: readonly ShiftCode[] = ["M", "M", "N", "OFF", "OFF"];
-
-// 4-day block cycle for ward supervisors (shift leaders): 3 mornings → 1 off.
-const SUPERVISOR_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "OFF"];
-
-// 6-day cycle for Nurse Assistants: 3M + 1N + 2 consecutive OFF days.
-// Morning-biased so most wards (which need more morning NAs than night) hit
-// their minimum without heavy enforcement. enforceMinima promotes additional
-// OFF→N on days that are still short on night NAs.
-// Pattern: M→M→M→N→OFF→OFF. No N→M violation anywhere (N at pos 3 → OFF ✓).
-// Wraparound: OFF→M ✓.
-const NA_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "N", "OFF", "OFF"];
 
 type WardMins = Pick<
   WardInput,
@@ -352,9 +333,15 @@ export function isGlobalHead(role: string) {
   return /^(head|coverage)\s*nurse$/i.test(role);
 }
 
+export function isMatron(role: string) {
+  return /^matron$/i.test(role);
+}
+
 export function isWardSupervisor(role: string) {
   return (
-    !isGlobalHead(role) && /supervisor|matron|sister|senior\s*nurse|experienced\s*nurse/i.test(role)
+    !isGlobalHead(role) &&
+    !isMatron(role) &&
+    /supervisor|matron|sister|senior\s*nurse|experienced\s*nurse/i.test(role)
   );
 }
 
@@ -744,6 +731,64 @@ export interface ScheduleResult {
 }
 
 /**
+ * Schedule coverage nurses (global, not ward-bound).
+ *
+ * Weekend rule  (Sat / Sun): always MWC — morning weekend coverage.
+ * Weekday rule: follow HEAD_NURSE_CYCLE [M, M, N, OFF, OFF].
+ *   The very first N position each nurse hits in the 28-day period becomes NC
+ *   (night coverage); every subsequent N remains a regular N shift.
+ */
+function scheduleCoverageNurses(
+  group: NurseInput[],
+  days: number,
+  startDate: Date,
+  leave: LeaveInput[],
+  out: DraftAssignment[],
+  phase = 0,
+): void {
+  const N = group.length;
+  if (N === 0) return;
+  const cycle = NURSE_CYCLE;
+  const len = cycle.length;
+  // Track whether each nurse has already received their one NC this period.
+  const ncUsed = new Array<boolean>(N).fill(false);
+
+  for (let d = 0; d < days; d++) {
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + d);
+    const dateStr = ymd(date);
+    const dow = date.getDay(); // 0 = Sun, 6 = Sat
+    const isWeekend = dow === 0 || dow === 6;
+
+    for (let i = 0; i < N; i++) {
+      if (inLeave(leave, group[i].id, dateStr)) {
+        out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift: "LEAVE" });
+        continue;
+      }
+
+      let shift: ShiftCode;
+      if (isWeekend) {
+        shift = "MWC";
+      } else {
+        const offset = Math.round((i * len) / N) % len;
+        const base = cycle[(((d + phase + offset) % len) + len) % len];
+        if (base === "N") {
+          if (!ncUsed[i]) {
+            shift = "NC";
+            ncUsed[i] = true;
+          } else {
+            shift = "N";
+          }
+        } else {
+          shift = base as ShiftCode;
+        }
+      }
+      out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
+    }
+  }
+}
+
+/**
  * Generate a 28-day draft schedule and return both the assignments and any
  * safety-rule violations that could not be resolved given the available staff.
  */
@@ -759,16 +804,19 @@ export function generateSchedule(opts: {
 }): ScheduleResult {
   const { nurses, wards, leave } = opts;
   const days = opts.days ?? 28;
-  const facility = opts.facility ?? "";
   const periodOffset = opts.periodOffset ?? 0;
   const out: DraftAssignment[] = [];
   const scheduled = new Set<string>();
   const allViolations: SafetyViolation[] = [];
   const allExtraShifts: ExtraShift[] = [];
 
+  // Matrons are not auto-scheduled; mark them up-front so step 4 skips them.
+  nurses.filter((n) => isMatron(n.role)).forEach((n) => scheduled.add(n.id));
+
   // 1. Coverage Nurses (global, not ward-bound)
+  // Uses scheduleCoverageNurses: weekends → MWC, first weekday N → NC, rest stay N.
   const headNurses = nurses.filter((n) => isGlobalHead(n.role));
-  scheduleGroup(headNurses, HEAD_NURSE_CYCLE, days, opts.startDate, leave, null, out, periodOffset);
+  scheduleCoverageNurses(headNurses, days, opts.startDate, leave, out, periodOffset);
   headNurses.forEach((n) => scheduled.add(n.id));
 
   // 2. Intern Nurses — grouped by assigned ward so interns in the same ward share
@@ -808,11 +856,15 @@ export function generateSchedule(opts: {
   }
 
   // 3. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
-  const supervisorCycle = facility === "Ikoyi" ? NURSE_CYCLE : SUPERVISOR_CYCLE;
+  // All roles use the universal 16-day NURSE_CYCLE (4M→4OFF→4N→4OFF).
 
   for (const ward of wards) {
     const wardNurses = nurses.filter(
-      (n) => parseWards(n.ward)[0] === ward.name && !isGlobalHead(n.role) && !isInternType(n.role),
+      (n) =>
+        parseWards(n.ward)[0] === ward.name &&
+        !isGlobalHead(n.role) &&
+        !isInternType(n.role) &&
+        !isMatron(n.role),
     );
 
     const supervisors = wardNurses.filter((n) => isWardSupervisor(n.role));
@@ -821,7 +873,7 @@ export function generateSchedule(opts: {
 
     scheduleGroup(
       supervisors,
-      supervisorCycle,
+      NURSE_CYCLE,
       days,
       opts.startDate,
       leave,
@@ -830,7 +882,7 @@ export function generateSchedule(opts: {
       periodOffset,
     );
     scheduleGroup(regulars, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
-    scheduleGroup(nas, NA_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
+    scheduleGroup(nas, NURSE_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset);
 
     // Only validate safety rules for wards that have staff in this run.
     // If wardNurses is empty (e.g. generating only for IP Ward, so ER has

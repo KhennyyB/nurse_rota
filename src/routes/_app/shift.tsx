@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarDays,
@@ -128,7 +128,7 @@ function ShiftPage() {
 
   // Today's rota assignment — poll every 30 s so the Start Shift button unlocks
   // automatically once an admin publishes the rota without the nurse needing to reload.
-  const { data: assignment } = useQuery<Assignment | null>({
+  const { data: queryAssignment } = useQuery<Assignment | null>({
     queryKey: ["my-assignment", nurseId, today],
     enabled: !!nurseId,
     refetchInterval: 30000,
@@ -142,6 +142,37 @@ function ShiftPage() {
       return data as Assignment | null;
     },
   });
+
+  // Fetch the nurse's job role (e.g. "Matron") to detect matron nurses who log
+  // in as the regular "nurse" AppRole and have no auto-generated assignments.
+  const { data: nurseJobRole } = useQuery<string | null>({
+    queryKey: ["nurse-job-role", nurseId],
+    enabled: !!nurseId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("nurses")
+        .select("role")
+        .eq("id", nurseId!)
+        .maybeSingle();
+      return data?.role ?? null;
+    },
+  });
+  const isMatronNurse = /^matron$/i.test(nurseJobRole ?? "");
+
+  // Matrons have no auto-generated assignments. Synthesise a Mon–Fri morning shift
+  // so they can use the tracker without a published rota entry.
+  const matronAssignment = useMemo<Assignment | null>(() => {
+    if (!isMatronNurse) return null;
+    const dow = new Date().getDay();
+    const isWeekend = dow === 0 || dow === 6;
+    return {
+      id: "",
+      shift: isWeekend ? "OFF" : "M",
+      shift_date: today,
+      ward: null,
+      status: "published",
+    };
+  }, [isMatronNurse, today]);
 
   // Active shift (may span midnight for night shifts) or today's completed shift.
   // Filtering by ended_at IS NULL catches a night shift started yesterday that hasn't
@@ -229,6 +260,9 @@ function ShiftPage() {
   if (activeRole && activeRole !== "nurse") {
     return <AllNursesShiftView />;
   }
+
+  // Matrons (job role "Matron") have no rota assignments — fall back to synthetic.
+  const assignment = queryAssignment ?? matronAssignment;
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
