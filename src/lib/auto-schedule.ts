@@ -5,12 +5,11 @@
 //   Matrons are never auto-scheduled (Mon–Fri mornings only, handled at shift-tracker level).
 // Rest rule: N on day d → cannot work M on day d+1.
 
-export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MC" | "MWC" | "NC";
+export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MWC" | "NC";
 
 export const SHIFT_TIMES = {
   M: { start: "08:00", end: "17:00", hours: 9, label: "Morning" },
   N: { start: "17:00", end: "08:00", hours: 15, label: "Night" },
-  MC: { start: "08:00", end: "17:00", hours: 9, label: "Morning Coverage" },
   NC: { start: "17:00", end: "08:00", hours: 15, label: "Night Coverage" },
   MWC: { start: "08:00", end: "17:00", hours: 9, label: "Morning Weekend Coverage" },
 } as const;

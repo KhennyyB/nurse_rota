@@ -60,7 +60,7 @@ export const Route = createFileRoute("/_app/rota")({
 });
 
 const DAYS = 28;
-const SHIFT_CYCLE: ShiftCode[] = ["M", "N", "MC", "NC", "MWC", "OFF", "LEAVE"];
+const SHIFT_CYCLE: ShiftCode[] = ["M", "N", "NC", "MWC", "OFF", "LEAVE"];
 const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"];
 
 const shiftStyles: Record<ShiftCode, string> = {
@@ -68,7 +68,6 @@ const shiftStyles: Record<ShiftCode, string> = {
   N: "bg-indigo-200 text-indigo-900 border-indigo-300",
   OFF: "bg-muted text-muted-foreground border-transparent",
   LEAVE: "bg-rose-100 text-rose-900 border-rose-200",
-  MC: "bg-emerald-100 text-emerald-900 border-emerald-200",
   NC: "bg-purple-200 text-purple-900 border-purple-300",
   MWC: "bg-cyan-100 text-cyan-900 border-cyan-200",
 };
@@ -299,7 +298,7 @@ function RotaPage() {
     const m = new Map<string, number>();
     assignments.forEach((a) => {
       const h =
-        a.shift === "M" || a.shift === "MC" || a.shift === "MWC"
+        a.shift === "M" || a.shift === "MWC"
           ? SHIFT_TIMES.M.hours
           : a.shift === "N" || a.shift === "NC"
             ? SHIFT_TIMES.N.hours
@@ -1409,7 +1408,6 @@ function Legend() {
   const items: { code: ShiftCode; label: string; time: string }[] = [
     { code: "M", label: "Morning", time: "08:00–17:00" },
     { code: "N", label: "Night", time: "17:00–08:00" },
-    { code: "MC", label: "Morning Coverage", time: "08:00–17:00" },
     { code: "NC", label: "Night Coverage", time: "17:00–08:00" },
     { code: "MWC", label: "Morning Weekend Coverage", time: "08:00–17:00" },
     { code: "OFF", label: "Off", time: "" },

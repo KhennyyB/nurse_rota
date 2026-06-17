@@ -43,7 +43,7 @@ const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 const NURSE_ROLES = [
   "Nurse",
-  "Senior Nurse",
+  "Matron",
   "Coverage Nurse",
   "Intern Nurse",
   "Nurse Assistant",
