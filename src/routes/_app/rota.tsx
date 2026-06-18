@@ -380,10 +380,27 @@ function RotaPage() {
     },
   });
 
-  // Wards that already have assignments in the selected date window — excluded from the dropdown.
+  // Nurse IDs and ward names scoped to the selected facility — used to prevent
+  // cross-facility ward name collisions when checking existing assignments.
+  const facilityNurseIds = useMemo(
+    () => nurses.filter((n) => n.facility === genForm.facility).map((n) => n.id),
+    [nurses, genForm.facility],
+  );
+  const facilityWardNames = useMemo(() => genWards.map((w) => w.name), [genWards]);
+
+  // Wards that already have assignments in the date window FOR THIS FACILITY ONLY.
+  // Filtering by both nurse_id (facility) and ward name prevents same-named wards
+  // in other facilities (e.g. "IP Ward" in Ikoyi vs Ligali) from blocking each other.
   const { data: scheduledWardNames = [] } = useQuery<string[]>({
-    queryKey: ["gen-scheduled-wards", genForm.startDate],
+    queryKey: [
+      "gen-scheduled-wards",
+      genForm.facility,
+      genForm.startDate,
+      facilityNurseIds,
+      facilityWardNames,
+    ],
     queryFn: async () => {
+      if (facilityNurseIds.length === 0 || facilityWardNames.length === 0) return [];
       const genEndDate = new Date(genForm.startDate + "T00:00:00");
       genEndDate.setDate(genEndDate.getDate() + 27);
       const { data } = await supabase
@@ -391,10 +408,15 @@ function RotaPage() {
         .select("ward")
         .gte("shift_date", genForm.startDate)
         .lte("shift_date", ymd(genEndDate))
-        .not("ward", "is", null);
+        .in("nurse_id", facilityNurseIds)
+        .in("ward", facilityWardNames);
       return [...new Set((data ?? []).map((a) => a.ward as string))];
     },
-    enabled: !!genForm.startDate,
+    enabled:
+      !!genForm.startDate &&
+      !!genForm.facility &&
+      facilityNurseIds.length > 0 &&
+      facilityWardNames.length > 0,
   });
 
   // Wards available for generation = those without existing assignments in the window.
