@@ -313,9 +313,13 @@ function RotaPage() {
   // True once any intern has been scheduled for this period (first ward run done).
   // Used to lock the rotate-interns checkbox and protect intern assignments in Clear.
   const internsAreScheduled = useMemo(() => {
-    const internIds = new Set(nurses.filter((n) => isInternType(n.role)).map((n) => n.id));
-    return assignments.some((a) => internIds.has(a.nurse_id));
-  }, [assignments, nurses]);
+    const facilityInternIds = new Set(
+      nurses
+        .filter((n) => isInternType(n.role) && n.facility === genForm.facility)
+        .map((n) => n.id),
+    );
+    return assignments.some((a) => facilityInternIds.has(a.nurse_id));
+  }, [assignments, nurses, genForm.facility]);
 
   // Unique role values derived from the loaded nurses list (for the role filter dropdown).
   const availableRoles = useMemo(
