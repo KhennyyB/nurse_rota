@@ -17,7 +17,7 @@ import {
   Clock,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   generateSchedule,
@@ -379,6 +379,36 @@ function RotaPage() {
       return ((await q).data ?? []) as WardInput[];
     },
   });
+
+  // Wards that already have assignments in the selected date window — excluded from the dropdown.
+  const { data: scheduledWardNames = [] } = useQuery<string[]>({
+    queryKey: ["gen-scheduled-wards", genForm.startDate],
+    queryFn: async () => {
+      const genEndDate = new Date(genForm.startDate + "T00:00:00");
+      genEndDate.setDate(genEndDate.getDate() + 27);
+      const { data } = await supabase
+        .from("shift_assignments")
+        .select("ward")
+        .gte("shift_date", genForm.startDate)
+        .lte("shift_date", ymd(genEndDate))
+        .not("ward", "is", null);
+      return [...new Set((data ?? []).map((a) => a.ward as string))];
+    },
+    enabled: !!genForm.startDate,
+  });
+
+  // Wards available for generation = those without existing assignments in the window.
+  const availableGenWards = useMemo(
+    () => genWards.filter((w) => !scheduledWardNames.includes(w.name)),
+    [genWards, scheduledWardNames],
+  );
+
+  // If the currently selected ward gets excluded (e.g. start date changed), clear it.
+  useEffect(() => {
+    if (genForm.ward && scheduledWardNames.includes(genForm.ward)) {
+      setGenForm((f) => ({ ...f, ward: "" }));
+    }
+  }, [scheduledWardNames, genForm.ward]);
 
   const leaveConflicts = useMemo(() => {
     return leave
@@ -1412,7 +1442,7 @@ function RotaPage() {
                 className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
               >
                 <option value="">Select ward…</option>
-                {genWards.map((w) => (
+                {availableGenWards.map((w) => (
                   <option key={w.name}>{w.name}</option>
                 ))}
               </select>
