@@ -668,8 +668,6 @@ function scheduleCoverageNurses(
     const date = new Date(startDate);
     date.setDate(date.getDate() + d);
     const dateStr = ymd(date);
-    const dow = date.getDay();
-    const isWeekend = dow === 0 || dow === 6;
 
     for (let i = 0; i < N; i++) {
       if (inLeave(leave, group[i].id, dateStr)) {
@@ -698,9 +696,7 @@ function scheduleCoverageNurses(
         shift = "OFF";
       } else if (afterNcOff) {
         // Resume NURSE_CYCLE from position 0 (4M → …) after NC + rest.
-        // M shifts on weekends → OFF (only MWC nurse covers weekend mornings).
-        const s = NURSE_CYCLE[(d - (ncStart! + 8)) % CL];
-        shift = isWeekend && s === "M" ? "OFF" : s;
+        shift = NURSE_CYCLE[(d - (ncStart! + 8)) % CL];
       } else {
         // Compute base shift: post-MWC resumed cycle or the regular staggered cycle.
         // cycleOffset 8 → resume N (M-block MWC); cycleOffset 0 → resume M (other).
@@ -715,12 +711,10 @@ function scheduleCoverageNurses(
             }
           }
         }
-        const base =
+        shift =
           mwcResumeAt !== undefined
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
             : computeShift(i, periodOffset + d, N, NURSE_CYCLE);
-        // Night shifts (N) continue on weekends; only M shifts become OFF.
-        shift = isWeekend && base === "M" ? "OFF" : base;
       }
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
