@@ -389,10 +389,11 @@ function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode
 /**
  * Schedule a group of nurses strictly following `cycle`, writing into `out`.
  *
- * Each nurse is assigned exactly their cycle position (4-block staggered) or
- * LEAVE when approved leave is active.  No vacancy filling, no rest-rule
- * overrides — the NURSE_CYCLE already guarantees N→M is never consecutive.
- * `phase` = periodOffset carries the cycle position forward across periods.
+ * Block assignment is hours-aware: the 4 staggered block positions deliver
+ * different total hours in any given 28-day window (due to 28 not being a
+ * multiple of 16). Nurses with higher target_hours are assigned to block
+ * positions that deliver more hours this period. For equal target_hours, the
+ * assignment rotates each period so no nurse is permanently in a light block.
  */
 function scheduleGroup(
   group: NurseInput[],
@@ -406,18 +407,63 @@ function scheduleGroup(
 ): void {
   const N = group.length;
   if (N === 0) return;
+
+  const len = cycle.length;
+  const numBlocks = Math.floor(len / 4);
+
+  // Compute hours delivered by each block position in this specific period.
+  const blockHours = Array.from({ length: numBlocks }, (_, b) => {
+    const offset = b * 4;
+    let h = 0;
+    for (let d = 0; d < days; d++) {
+      const s = cycle[(((phase + d + offset) % len) + len) % len];
+      if (s === "M") h += SHIFT_TIMES.M.hours;
+      else if (s === "N") h += SHIFT_TIMES.N.hours;
+    }
+    return h;
+  });
+
+  // Blocks ranked highest-hours first; ties broken by block index.
+  const rankedBlocks = Array.from({ length: numBlocks }, (_, b) => b).sort(
+    (a, b) => blockHours[b] - blockHours[a] || a - b,
+  );
+
+  // Stable output order (by ID).
+  const byId = [...group].sort((a, b) => a.id.localeCompare(b.id));
+  const idRank = new Map(byId.map((n, i) => [n.id, i]));
+
+  // Assignment order: higher target_hours → higher-hours block.
+  // Within equal target_hours, rotate by periodsElapsed for long-run fairness.
+  const periodsElapsed = days > 0 ? Math.round(phase / days) : 0;
+  const forAssignment = [...byId].sort((a, b) => {
+    const tDiff = (b.target_hours ?? 0) - (a.target_hours ?? 0);
+    if (tDiff !== 0) return tDiff;
+    const ra = ((idRank.get(a.id) ?? 0) + periodsElapsed) % N;
+    const rb = ((idRank.get(b.id) ?? 0) + periodsElapsed) % N;
+    return ra - rb;
+  });
+
+  // Each nurse's sorted rank i maps to the standard stagger slot, then to a
+  // ranked block — preserving coverage spread while honouring hour targets.
+  const nurseBlock = new Map<string, number>();
+  for (let i = 0; i < N; i++) {
+    const slot = Math.round((i * numBlocks) / N) % numBlocks;
+    nurseBlock.set(forAssignment[i].id, rankedBlocks[slot]);
+  }
+
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + d);
     const dateStr = ymd(date);
-    for (let i = 0; i < N; i++) {
+    for (const nurse of byId) {
+      const offset = (nurseBlock.get(nurse.id) ?? 0) * 4;
       out.push({
-        nurse_id: group[i].id,
+        nurse_id: nurse.id,
         ward: wardName,
         shift_date: dateStr,
-        shift: inLeave(leave, group[i].id, dateStr)
+        shift: inLeave(leave, nurse.id, dateStr)
           ? "LEAVE"
-          : computeShift(i, d + phase, N, cycle),
+          : cycle[(((phase + d + offset) % len) + len) % len],
       });
     }
   }
