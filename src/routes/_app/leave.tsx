@@ -82,7 +82,7 @@ function LeavePage() {
 
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected") {
     if (status === "Approved" && l.nurse_id) {
-      // Fetch all published/approved assignments for this nurse during the leave window.
+      // Fetch the nurse's locked assignments during the leave window.
       const [{ data: leavingShifts }, { data: leavingNurse }] = await Promise.all([
         supabase
           .from("shift_assignments")
@@ -90,34 +90,59 @@ function LeavePage() {
           .eq("nurse_id", l.nurse_id)
           .gte("shift_date", l.from_date)
           .lte("shift_date", l.to_date)
-          .in("status", ["approved_chief", "approved_cno", "published"]),
+          .in("status", ["submitted", "approved_chief", "approved_cno", "published"]),
         supabase.from("nurses").select("role").eq("id", l.nurse_id).maybeSingle(),
       ]);
 
       if (leavingShifts && leavingShifts.length > 0) {
         const ward = leavingShifts.find((s) => s.ward)?.ward ?? null;
         const workingShifts = leavingShifts.filter(
-          (s): s is (typeof s & { shift: "M" | "N" }) => s.shift === "M" || s.shift === "N",
+          (s): s is typeof s & { shift: "M" | "N" } => s.shift === "M" || s.shift === "N",
         );
 
-        // Collect OFF candidates and role/previous-day data for replacement search.
+        if (ward) {
+          // Revert ALL locked assignments for the entire ward (the scheduling period)
+          // to draft so the ward reappears in the generate dropdown for regeneration.
+          // We find the period bounds from the ward's currently locked assignments.
+          const { data: periodBounds } = await supabase
+            .from("shift_assignments")
+            .select("shift_date")
+            .eq("ward", ward)
+            .in("status", ["submitted", "approved_chief", "approved_cno", "published"])
+            .order("shift_date", { ascending: true });
+
+          if (periodBounds && periodBounds.length > 0) {
+            const periodStart = periodBounds[0].shift_date;
+            const periodEnd = periodBounds[periodBounds.length - 1].shift_date;
+
+            await supabase
+              .from("shift_assignments")
+              .update({ status: "draft" })
+              .eq("ward", ward)
+              .gte("shift_date", periodStart)
+              .lte("shift_date", periodEnd)
+              .in("status", ["submitted", "approved_chief", "approved_cno", "published"]);
+          }
+        }
+
+        // Mark the leave nurse's working shifts as LEAVE + find immediate replacements
+        // (so the schedule is correct even if the admin re-approves without regenerating).
         let offCandidates: { id: string; nurse_id: string; shift_date: string }[] = [];
         let roleMap = new Map<string, string>();
-        // "nurseId|mDate" — nurse had N the day before this M shift; ineligible for M.
-        const nYesterdaySet = new Set<string>();
+        const nYesterdaySet = new Set<string>(); // "nurseId|mDate" — had N day before M
 
         if (workingShifts.length > 0 && ward) {
           const leaveDates = workingShifts.map((s) => s.shift_date);
-          const mShifts = workingShifts.filter((s) => s.shift === "M");
           const prevToM = new Map(
-            mShifts.map((s) => {
-              const prev = new Date(s.shift_date + "T00:00:00");
-              prev.setDate(prev.getDate() - 1);
-              return [prev.toISOString().slice(0, 10), s.shift_date];
-            }),
+            workingShifts
+              .filter((s) => s.shift === "M")
+              .map((s) => {
+                const prev = new Date(s.shift_date + "T00:00:00");
+                prev.setDate(prev.getDate() - 1);
+                return [prev.toISOString().slice(0, 10), s.shift_date];
+              }),
           );
 
-          // Fetch OFF candidates in the same ward for the leave dates.
           const { data: offData } = await supabase
             .from("shift_assignments")
             .select("id, nurse_id, shift_date")
@@ -151,7 +176,6 @@ function LeavePage() {
           }
         }
 
-        // Build DB updates: mark all published shifts as LEAVE + draft.
         const updates: PromiseLike<unknown>[] = leavingShifts.map((s) =>
           supabase
             .from("shift_assignments")
@@ -165,20 +189,16 @@ function LeavePage() {
         let covered = 0;
         let uncovered = 0;
 
-        // Find a replacement for each working shift.
         for (const s of workingShifts) {
           const eligible = offCandidates.filter(
             (c) =>
               c.shift_date === s.shift_date &&
               !(s.shift === "M" && nYesterdaySet.has(`${c.nurse_id}|${s.shift_date}`)),
           );
-          // Prefer same role category (NA→NA, supervisor→supervisor, nurse→nurse).
           const chosen =
             eligible.find((c) => {
               const role = roleMap.get(c.nurse_id) ?? "";
-              return (
-                isNAType(role) === leavingIsNA && isWardSupervisor(role) === leavingIsSupervisor
-              );
+              return isNAType(role) === leavingIsNA && isWardSupervisor(role) === leavingIsSupervisor;
             }) ?? eligible[0];
 
           if (chosen) {
@@ -196,31 +216,30 @@ function LeavePage() {
 
         await Promise.all(updates);
 
-        // Approve the leave request.
         const { error } = await supabase
           .from("leave_requests")
           .update({ status: "Approved", reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
           .eq("id", l.id);
         if (error) return toast.error(error.message);
 
-        const coverNote =
-          covered > 0 ? ` ${covered} shift(s) reassigned to available staff.` : "";
+        const coverNote = covered > 0 ? ` ${covered} shift(s) reassigned from available staff.` : "";
         const warnNote =
-          uncovered > 0
-            ? ` ${uncovered} shift(s) could not be covered — rota needs review.`
-            : "";
-        toast.success(`Leave approved. Rota reverted to draft for re-approval.${coverNote}${warnNote}`);
+          uncovered > 0 ? ` ${uncovered} shift(s) need manual cover — regenerate the ward.` : "";
+        toast.success(
+          `Leave approved. Ward rota reverted to draft — regenerate or re-approve.${coverNote}${warnNote}`,
+        );
         logAudit(
-          `Approved leave (post-publish): ${leavingShifts.length} shift(s) → LEAVE, ${covered} reassigned`,
+          `Approved leave (post-publish): ward reverted to draft, ${covered} shift(s) reassigned`,
           l.nurse_name,
         );
         qc.invalidateQueries({ queryKey: ["leave"] });
         qc.invalidateQueries({ queryKey: ["assignments"] });
+        qc.invalidateQueries({ queryKey: ["gen-scheduled-wards"] });
         return;
       }
     }
 
-    // No published shifts affected (draft rota or Rejected) — standard path.
+    // No locked shifts in this window (draft rota or Rejected) — standard path.
     const { error } = await supabase
       .from("leave_requests")
       .update({ status, reviewed_by: user?.id, reviewed_at: new Date().toISOString() })

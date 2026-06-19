@@ -407,14 +407,38 @@ function RotaPage() {
       if (facilityNurseIds.length === 0 || facilityWardNames.length === 0) return [];
       const genEndDate = new Date(genForm.startDate + "T00:00:00");
       genEndDate.setDate(genEndDate.getDate() + 27);
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("ward")
-        .gte("shift_date", genForm.startDate)
-        .lte("shift_date", ymd(genEndDate))
-        .in("nurse_id", facilityNurseIds)
-        .in("ward", facilityWardNames);
-      return [...new Set((data ?? []).map((a) => a.ward as string))];
+      const base = {
+        from: genForm.startDate,
+        to: ymd(genEndDate),
+        nurseIds: facilityNurseIds,
+        wardNames: facilityWardNames,
+      };
+      // Two passes: wards with ANY assignment, and wards with at least one DRAFT.
+      // A ward is "fully locked" (hide from dropdown) only when it has assignments
+      // but NONE are draft — i.e. everything is submitted/approved/published.
+      // A ward with mixed published+draft (e.g. after post-publish leave approval)
+      // is shown so the admin can regenerate it.
+      const [{ data: anyData }, { data: draftData }] = await Promise.all([
+        supabase
+          .from("shift_assignments")
+          .select("ward")
+          .gte("shift_date", base.from)
+          .lte("shift_date", base.to)
+          .in("nurse_id", base.nurseIds)
+          .in("ward", base.wardNames),
+        supabase
+          .from("shift_assignments")
+          .select("ward")
+          .gte("shift_date", base.from)
+          .lte("shift_date", base.to)
+          .in("nurse_id", base.nurseIds)
+          .in("ward", base.wardNames)
+          .eq("status", "draft"),
+      ]);
+      const withAny = new Set((anyData ?? []).map((a) => a.ward as string));
+      const withDraft = new Set((draftData ?? []).map((a) => a.ward as string));
+      // Hide only wards that have assignments AND none of them are draft.
+      return [...withAny].filter((w) => !withDraft.has(w));
     },
     enabled:
       !!genForm.startDate &&
@@ -423,7 +447,7 @@ function RotaPage() {
       facilityWardNames.length > 0,
   });
 
-  // Wards available for generation = those without existing assignments in the window.
+  // Wards available for generation = those without fully-locked existing assignments.
   const availableGenWards = useMemo(
     () => genWards.filter((w) => !scheduledWardNames.includes(w.name)),
     [genWards, scheduledWardNames],
