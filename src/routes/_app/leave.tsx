@@ -9,7 +9,6 @@ import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import { isNAType, isWardSupervisor } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/leave")({
   component: LeavePage,
@@ -82,164 +81,54 @@ function LeavePage() {
 
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected") {
     if (status === "Approved" && l.nurse_id) {
-      // Fetch the nurse's locked assignments during the leave window.
-      const [{ data: leavingShifts }, { data: leavingNurse }] = await Promise.all([
-        supabase
-          .from("shift_assignments")
-          .select("id, shift_date, shift, ward")
-          .eq("nurse_id", l.nurse_id)
-          .gte("shift_date", l.from_date)
-          .lte("shift_date", l.to_date)
-          .in("status", ["submitted", "approved_chief", "approved_cno", "published"]),
-        supabase.from("nurses").select("role").eq("id", l.nurse_id).maybeSingle(),
-      ]);
+      // Fetch only working (M/N) locked assignments — these are the shifts that need cover.
+      const { data: publishedShifts } = await supabase
+        .from("shift_assignments")
+        .select("id, shift_date, shift")
+        .eq("nurse_id", l.nurse_id)
+        .gte("shift_date", l.from_date)
+        .lte("shift_date", l.to_date)
+        .in("status", ["submitted", "approved_chief", "approved_cno", "published"])
+        .in("shift", ["M", "N"]);
 
-      if (leavingShifts && leavingShifts.length > 0) {
-        const ward = leavingShifts.find((s) => s.ward)?.ward ?? null;
-        const workingShifts = leavingShifts.filter(
-          (s): s is typeof s & { shift: "M" | "N" } => s.shift === "M" || s.shift === "N",
+      if (publishedShifts && publishedShifts.length > 0) {
+        // Mark each working shift as LEAVE while keeping the rota published.
+        await Promise.all(
+          publishedShifts.map((s) =>
+            supabase.from("shift_assignments").update({ shift: "LEAVE" }).eq("id", s.id),
+          ),
         );
-
-        if (ward) {
-          // Revert ALL locked assignments for the entire ward (the scheduling period)
-          // to draft so the ward reappears in the generate dropdown for regeneration.
-          // We find the period bounds from the ward's currently locked assignments.
-          const { data: periodBounds } = await supabase
-            .from("shift_assignments")
-            .select("shift_date")
-            .eq("ward", ward)
-            .in("status", ["submitted", "approved_chief", "approved_cno", "published"])
-            .order("shift_date", { ascending: true });
-
-          if (periodBounds && periodBounds.length > 0) {
-            const periodStart = periodBounds[0].shift_date;
-            const periodEnd = periodBounds[periodBounds.length - 1].shift_date;
-
-            await supabase
-              .from("shift_assignments")
-              .update({ status: "draft" })
-              .eq("ward", ward)
-              .gte("shift_date", periodStart)
-              .lte("shift_date", periodEnd)
-              .in("status", ["submitted", "approved_chief", "approved_cno", "published"]);
-          }
-        }
-
-        // Mark the leave nurse's working shifts as LEAVE + find immediate replacements
-        // (so the schedule is correct even if the admin re-approves without regenerating).
-        let offCandidates: { id: string; nurse_id: string; shift_date: string }[] = [];
-        let roleMap = new Map<string, string>();
-        const nYesterdaySet = new Set<string>(); // "nurseId|mDate" — had N day before M
-
-        if (workingShifts.length > 0 && ward) {
-          const leaveDates = workingShifts.map((s) => s.shift_date);
-          const prevToM = new Map(
-            workingShifts
-              .filter((s) => s.shift === "M")
-              .map((s) => {
-                const prev = new Date(s.shift_date + "T00:00:00");
-                prev.setDate(prev.getDate() - 1);
-                return [prev.toISOString().slice(0, 10), s.shift_date];
-              }),
-          );
-
-          const { data: offData } = await supabase
-            .from("shift_assignments")
-            .select("id, nurse_id, shift_date")
-            .in("shift_date", leaveDates)
-            .eq("ward", ward)
-            .eq("shift", "OFF")
-            .neq("nurse_id", l.nurse_id);
-
-          offCandidates = offData ?? [];
-          const candidateIds = [...new Set(offCandidates.map((c) => c.nurse_id))];
-
-          if (candidateIds.length > 0) {
-            const prevDates = [...prevToM.keys()];
-            const [{ data: nurseData }, { data: prevNData }] = await Promise.all([
-              supabase.from("nurses").select("id, role").in("id", candidateIds),
-              prevDates.length > 0
-                ? supabase
-                    .from("shift_assignments")
-                    .select("nurse_id, shift_date")
-                    .in("shift_date", prevDates)
-                    .in("nurse_id", candidateIds)
-                    .eq("shift", "N")
-                : Promise.resolve({ data: [] as { nurse_id: string; shift_date: string }[] }),
-            ]);
-
-            roleMap = new Map((nurseData ?? []).map((n) => [n.id, n.role]));
-            for (const row of prevNData ?? []) {
-              const mDate = prevToM.get(row.shift_date);
-              if (mDate) nYesterdaySet.add(`${row.nurse_id}|${mDate}`);
-            }
-          }
-        }
-
-        const updates: PromiseLike<unknown>[] = leavingShifts.map((s) =>
-          supabase
-            .from("shift_assignments")
-            .update({ shift: "LEAVE", status: "draft" })
-            .eq("id", s.id),
-        );
-
-        const leavingRole = leavingNurse?.role ?? "";
-        const leavingIsNA = isNAType(leavingRole);
-        const leavingIsSupervisor = isWardSupervisor(leavingRole);
-        let covered = 0;
-        let uncovered = 0;
-
-        for (const s of workingShifts) {
-          const eligible = offCandidates.filter(
-            (c) =>
-              c.shift_date === s.shift_date &&
-              !(s.shift === "M" && nYesterdaySet.has(`${c.nurse_id}|${s.shift_date}`)),
-          );
-          const chosen =
-            eligible.find((c) => {
-              const role = roleMap.get(c.nurse_id) ?? "";
-              return isNAType(role) === leavingIsNA && isWardSupervisor(role) === leavingIsSupervisor;
-            }) ?? eligible[0];
-
-          if (chosen) {
-            updates.push(
-              supabase
-                .from("shift_assignments")
-                .update({ shift: s.shift, status: "draft" })
-                .eq("id", chosen.id),
-            );
-            covered++;
-          } else {
-            uncovered++;
-          }
-        }
-
-        await Promise.all(updates);
 
         const { error } = await supabase
           .from("leave_requests")
-          .update({ status: "Approved", reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
+          .update({
+            status: "Approved",
+            reviewed_by: user?.id,
+            reviewed_at: new Date().toISOString(),
+          })
           .eq("id", l.id);
         if (error) return toast.error(error.message);
 
-        const coverNote = covered > 0 ? ` ${covered} shift(s) reassigned from available staff.` : "";
-        const warnNote =
-          uncovered > 0 ? ` ${uncovered} shift(s) need manual cover — regenerate the ward.` : "";
+        const mDates = publishedShifts.filter((s) => s.shift === "M").map((s) => s.shift_date);
+        const nDates = publishedShifts.filter((s) => s.shift === "N").map((s) => s.shift_date);
+        const parts: string[] = [];
+        if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
+        if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
         toast.success(
-          `Leave approved. Ward rota reverted to draft — regenerate or re-approve.${coverNote}${warnNote}`,
+          `Leave approved — rota updated. CNO action required: ${parts.join("; ")} need shift cover.`,
+          { duration: 8000 },
         );
         logAudit(
-          `Approved leave (post-publish): ward reverted to draft, ${covered} shift(s) reassigned`,
+          `Approved leave (post-publish): ${publishedShifts.length} shift(s) marked LEAVE`,
           l.nurse_name,
         );
         qc.invalidateQueries({ queryKey: ["leave"] });
         qc.invalidateQueries({ queryKey: ["assignments"] });
-        qc.invalidateQueries({ queryKey: ["gen-scheduled-wards"] });
         return;
       }
     }
 
-    // No locked shifts in this window (draft rota or Rejected) — standard path.
+    // No locked working shifts in this window (draft rota or Rejected) — standard path.
     const { error } = await supabase
       .from("leave_requests")
       .update({ status, reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
@@ -763,16 +652,29 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
 
 // ── Shift switch request modal ───────────────────────────────────────────────
 
+const SWITCH_FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
+
+function splitWards(ward: string | null | undefined): string[] {
+  if (!ward) return [];
+  return ward
+    .split("|")
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
+
 function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const { user, fullName } = useAuth();
   const qc = useQueryClient();
 
   const { data: nurses = [] } = useQuery({
-    queryKey: ["nurses-min"],
+    queryKey: ["nurses-switch"],
     queryFn: async () =>
-      (await supabase.from("nurses").select("id, name").order("name")).data ?? [],
+      (
+        await supabase.from("nurses").select("id, name, ward, facility").order("name")
+      ).data ?? [],
   });
 
+  const [facility, setFacility] = useState("");
   const [nurseAId, setNurseAId] = useState("");
   const [nurseBId, setNurseBId] = useState("");
   const [date, setDate] = useState("");
@@ -781,7 +683,18 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const [shiftB, setShiftB] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // When a nurse and date are selected, auto-fetch their published shift
+  const facilityNurses = nurses.filter((n) => n.facility === facility);
+  const nurseA = nurses.find((n) => n.id === nurseAId);
+  const nurseAWards = splitWards(nurseA?.ward);
+  // Nurse B must share at least one ward with Nurse A and belong to the same facility.
+  const nurseBList = nurseAId
+    ? facilityNurses.filter(
+        (n) =>
+          n.id !== nurseAId &&
+          splitWards(n.ward).some((w) => nurseAWards.includes(w)),
+      )
+    : [];
+
   async function fetchShift(nurseId: string, setShift: (s: string) => void) {
     if (!nurseId || !date) return;
     const { data } = await supabase
@@ -801,9 +714,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       return toast.error("Could not find published shifts for both nurses on that date");
 
     setBusy(true);
-    const nurseA = nurses.find((n) => n.id === nurseAId);
     const nurseB = nurses.find((n) => n.id === nurseBId);
-
     const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${shiftA}|${shiftB}`;
 
     const { error } = await supabase.from("leave_requests").insert({
@@ -829,9 +740,36 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Request shift switch" onClose={onClose}>
       <p className="text-xs text-muted-foreground mb-4">
-        Switches are applied to the <strong>published rota</strong> only after admin approval.
+        Switches are applied to the <strong>published rota</strong> only after CNO approval.
       </p>
       <form onSubmit={submit} className="space-y-4">
+        {/* Facility */}
+        <div>
+          <label htmlFor="sw-facility" className="text-sm font-medium">
+            Facility <span className="text-destructive">*</span>
+          </label>
+          <select
+            id="sw-facility"
+            required
+            value={facility}
+            onChange={(e) => {
+              setFacility(e.target.value);
+              setNurseAId("");
+              setNurseBId("");
+              setShiftA("");
+              setShiftB("");
+            }}
+            className={inputCls}
+          >
+            <option value="">Select facility…</option>
+            {SWITCH_FACILITIES.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </div>
+
         {/* Date */}
         <div>
           <label htmlFor="sw-date" className="text-sm font-medium">
@@ -851,7 +789,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           />
         </div>
 
-        {/* Nurse A */}
+        {/* Nurse A — filtered by facility */}
         <div>
           <label htmlFor="sw-nurse-a" className="text-sm font-medium">
             Nurse A <span className="text-destructive">*</span>
@@ -859,16 +797,19 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <select
             id="sw-nurse-a"
             required
+            disabled={!facility}
             value={nurseAId}
             onChange={(e) => {
               setNurseAId(e.target.value);
+              setNurseBId("");
               setShiftA("");
+              setShiftB("");
               fetchShift(e.target.value, setShiftA);
             }}
             className={inputCls}
           >
-            <option value="">Select nurse…</option>
-            {nurses.map((n) => (
+            <option value="">{facility ? "Select nurse…" : "Select facility first…"}</option>
+            {facilityNurses.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name}
               </option>
@@ -884,7 +825,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        {/* Nurse B */}
+        {/* Nurse B — filtered by Nurse A's ward(s) */}
         <div>
           <label htmlFor="sw-nurse-b" className="text-sm font-medium">
             Nurse B <span className="text-destructive">*</span>
@@ -892,6 +833,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <select
             id="sw-nurse-b"
             required
+            disabled={!nurseAId}
             value={nurseBId}
             onChange={(e) => {
               setNurseBId(e.target.value);
@@ -900,15 +842,18 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             }}
             className={inputCls}
           >
-            <option value="">Select nurse…</option>
-            {nurses
-              .filter((n) => n.id !== nurseAId)
-              .map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.name}
-                </option>
-              ))}
+            <option value="">{nurseAId ? "Select nurse…" : "Select Nurse A first…"}</option>
+            {nurseBList.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name}
+              </option>
+            ))}
           </select>
+          {nurseAId && nurseBList.length === 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              No other nurses found in the same ward.
+            </p>
+          )}
           {shiftB && (
             <p className="mt-1 text-xs text-muted-foreground">
               Published shift: <span className="font-semibold text-foreground">{shiftB}</span>
@@ -942,7 +887,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={busy || !nurseAId || !nurseBId || !date}
+            disabled={busy || !facility || !nurseAId || !nurseBId || !date}
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >

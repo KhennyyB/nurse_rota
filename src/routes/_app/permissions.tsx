@@ -62,6 +62,18 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
 
+  // ── Shift switches ────────────────────────────────────────────────────────
+  {
+    key: "request_shift_switch",
+    label: "Request Shift Switch (Chief Matron initiates)",
+    roles: ["admin", "chief_matron"],
+  },
+  {
+    key: "approve_shift_switch",
+    label: "Approve / Reject Shift Switch (CNO approves)",
+    roles: ["admin", "cno"],
+  },
+
   // ── Approval workflow ────────────────────────────────────────────────────
   {
     key: "submit_approval",

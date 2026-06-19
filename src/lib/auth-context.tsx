@@ -165,8 +165,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canDelete: ar === "admin",
     canManageStaff: isInActiveRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
     canApproveLeave: isInActiveRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
-    canRequestShiftSwitch: isInActiveRole("admin", "cno"),
-    canApproveShiftSwitch: ar === "admin",
+    canRequestShiftSwitch: isInActiveRole("admin", "chief_matron"),
+    canApproveShiftSwitch: isInActiveRole("admin", "cno"),
     canCreateLogin: ar === "admin",
     canEditTargetHours: ar !== null && capabilityRoles("edit_target_hours", ["admin"]).includes(ar),
     signOut: async () => {
