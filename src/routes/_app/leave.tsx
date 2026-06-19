@@ -168,17 +168,38 @@ function LeavePage() {
         );
       }
 
-      // Swap the shifts on the published rota
-      const [{ error: e1 }, { error: e2 }] = await Promise.all([
-        supabase.from("shift_assignments").update({ shift: assignB.shift }).eq("id", assignA.id),
-        supabase.from("shift_assignments").update({ shift: assignA.shift }).eq("id", assignB.id),
-      ]);
-      if (e1 || e2) return toast.error((e1 ?? e2)!.message);
-      qc.invalidateQueries({ queryKey: ["assignments"] });
-      logAudit(
-        `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}`,
-        sw.date,
-      );
+      if (assignA.shift === "LEAVE") {
+        // Nurse A is on approved leave — only assign Nurse B the intended working shift.
+        // sw.shiftA holds the shift type encoded at request time (M or N).
+        const targetShift = sw.shiftA === "M" || sw.shiftA === "N" ? sw.shiftA : null;
+        if (!targetShift) {
+          return toast.error(
+            "Cannot apply — no valid working shift (M/N) was recorded for Nurse A at request time. Please re-submit the switch request.",
+          );
+        }
+        const { error } = await supabase
+          .from("shift_assignments")
+          .update({ shift: targetShift })
+          .eq("id", assignB.id);
+        if (error) return toast.error(error.message);
+        qc.invalidateQueries({ queryKey: ["assignments"] });
+        logAudit(
+          `Leave coverage applied: ${sw.nurseBName} covers ${l.nurse_name}'s ${targetShift} shift`,
+          sw.date,
+        );
+      } else {
+        // Normal swap — both nurses exchange their current published shifts.
+        const [{ error: e1 }, { error: e2 }] = await Promise.all([
+          supabase.from("shift_assignments").update({ shift: assignB.shift }).eq("id", assignA.id),
+          supabase.from("shift_assignments").update({ shift: assignA.shift }).eq("id", assignB.id),
+        ]);
+        if (e1 || e2) return toast.error((e1 ?? e2)!.message);
+        qc.invalidateQueries({ queryKey: ["assignments"] });
+        logAudit(
+          `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}`,
+          sw.date,
+        );
+      }
     }
 
     const { error } = await supabase
@@ -307,7 +328,7 @@ function LeavePage() {
           title={activeTab === "switches" ? "No shift switch requests" : "No leave requests yet"}
           description={
             activeTab === "switches"
-              ? "CNO can request a shift switch on a published rota."
+              ? "Chief Matron can request a shift switch on a published rota."
               : "Submit a new request to get started."
           }
           action={
@@ -681,6 +702,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const [reason, setReason] = useState("");
   const [shiftA, setShiftA] = useState("");
   const [shiftB, setShiftB] = useState("");
+  const [coverShift, setCoverShift] = useState<"M" | "N" | "">("");
   const [busy, setBusy] = useState(false);
 
   const facilityNurses = nurses.filter((n) => n.facility === facility);
@@ -710,12 +732,16 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (nurseAId === nurseBId) return toast.error("Please select two different nurses");
-    if (!shiftA || !shiftB)
-      return toast.error("Could not find published shifts for both nurses on that date");
+    if (!shiftA) return toast.error("Could not find published shift for Nurse A on that date");
+    if (!shiftB) return toast.error("Could not find published shift for Nurse B on that date");
+    if (shiftA === "LEAVE" && !coverShift)
+      return toast.error("Nurse A is on leave — please select the shift type that needs covering");
 
     setBusy(true);
     const nurseB = nurses.find((n) => n.id === nurseBId);
-    const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${shiftA}|${shiftB}`;
+    // When Nurse A is on LEAVE, encode the manually-selected coverage shift instead.
+    const effectiveShiftA = shiftA === "LEAVE" ? coverShift : shiftA;
+    const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${effectiveShiftA}|${shiftB}`;
 
     const { error } = await supabase.from("leave_requests").insert({
       nurse_id: nurseAId,
@@ -804,6 +830,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               setNurseBId("");
               setShiftA("");
               setShiftB("");
+              setCoverShift("");
               fetchShift(e.target.value, setShiftA);
             }}
             className={inputCls}
@@ -815,10 +842,33 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
-          {shiftA && (
+          {shiftA && shiftA !== "LEAVE" && (
             <p className="mt-1 text-xs text-muted-foreground">
               Published shift: <span className="font-semibold text-foreground">{shiftA}</span>
             </p>
+          )}
+          {shiftA === "LEAVE" && (
+            <div className="mt-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800">
+              <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">
+                Nurse A is on approved leave. Select the shift type that needs covering:
+              </p>
+              <div className="flex gap-2">
+                {(["M", "N"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setCoverShift(s)}
+                    className={`h-8 px-4 rounded-md text-sm font-medium border transition-colors ${
+                      coverShift === s
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-card border-border hover:bg-muted"
+                    }`}
+                  >
+                    {s === "M" ? "Morning (M)" : "Night (N)"}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           {nurseAId && date && !shiftA && (
             <p className="mt-1 text-xs text-destructive">No published shift found for this date.</p>
@@ -887,7 +937,14 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={busy || !facility || !nurseAId || !nurseBId || !date}
+            disabled={
+              busy ||
+              !facility ||
+              !nurseAId ||
+              !nurseBId ||
+              !date ||
+              (shiftA === "LEAVE" && !coverShift)
+            }
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >
