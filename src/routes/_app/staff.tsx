@@ -94,7 +94,7 @@ function StaffPage() {
       const { data, error } = await supabase
         .from("nurses")
         .select("*")
-        .order("created_at", { ascending: false });
+        .order("name", { ascending: true });
       if (error) throw error;
       return data as Nurse[];
     },
