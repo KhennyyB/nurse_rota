@@ -286,6 +286,9 @@ function RotaPage() {
     },
   });
 
+  // True once at least one assignment exists for the current window.
+  const hasSchedule = !isLoading && assignments.length > 0;
+
   // ── Derived data ─────────────────────────────────────────────────────────
   const cellMap = useMemo(() => {
     const m = new Map<string, Assignment>();
@@ -834,9 +837,11 @@ function RotaPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
-      // Always refresh so the UI reflects the actual DB state,
-      // even if the generation partially failed.
+      // Refresh assignments and re-detect the schedule window so the rota view
+      // snaps to the generated period automatically.
       qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
+      setStartOffset(0);
       setBusy(false);
     }
   }
@@ -1003,38 +1008,44 @@ function RotaPage() {
     <div>
       <PageHeader
         title="Rota"
-        subtitle={`28-day view · ${days[0].toLocaleDateString()} → ${days[DAYS - 1].toLocaleDateString()}`}
+        subtitle={
+          hasSchedule
+            ? `28-day view · ${days[0].toLocaleDateString()} → ${days[DAYS - 1].toLocaleDateString()}`
+            : "Generate a schedule to view the rota"
+        }
       />
 
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
-        {/* Week nav */}
-        <div className="inline-flex rounded-md border bg-card">
-          <button
-            type="button"
-            onClick={() => setStartOffset((o) => o - 1)}
-            className="h-9 w-9 grid place-items-center hover:bg-muted"
-            title="Previous 28-day period"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setStartOffset(0)}
-            className="px-3 text-xs font-medium hover:bg-muted"
-            title="Jump to active schedule"
-          >
-            Current
-          </button>
-          <button
-            type="button"
-            onClick={() => setStartOffset((o) => o + 1)}
-            className="h-9 w-9 grid place-items-center hover:bg-muted"
-            title="Next 28-day period"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
+        {/* Period nav — only shown once a schedule exists */}
+        {hasSchedule && (
+          <div className="inline-flex rounded-md border bg-card">
+            <button
+              type="button"
+              onClick={() => setStartOffset((o) => o - 1)}
+              className="h-9 w-9 grid place-items-center hover:bg-muted"
+              title="Previous 28-day period"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setStartOffset(0)}
+              className="px-3 text-xs font-medium hover:bg-muted"
+              title="Jump to active schedule"
+            >
+              Current
+            </button>
+            <button
+              type="button"
+              onClick={() => setStartOffset((o) => o + 1)}
+              className="h-9 w-9 grid place-items-center hover:bg-muted"
+              title="Next 28-day period"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
         {/* Facility filter — locked for non-admin nurses */}
         {lockedFacility ? (
@@ -1255,6 +1266,23 @@ function RotaPage() {
                 <Users className="h-4 w-4" /> Manage staff
               </Link>
             )
+          }
+        />
+      ) : !hasSchedule ? (
+        <EmptyState
+          icon={<CalendarDays className="h-6 w-6" />}
+          title="No schedule for this period"
+          description="Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
+          action={
+            isAdmin ? (
+              <button
+                type="button"
+                onClick={() => setGenOpen(true)}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
+              >
+                <CalendarDays className="h-4 w-4" /> Auto-generate
+              </button>
+            ) : undefined
           }
         />
       ) : (
