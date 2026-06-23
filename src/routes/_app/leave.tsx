@@ -690,9 +690,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-switch"],
     queryFn: async () =>
-      (
-        await supabase.from("nurses").select("id, name, ward, facility").order("name")
-      ).data ?? [],
+      (await supabase.from("nurses").select("id, name, ward, facility").order("name")).data ?? [],
   });
 
   const [facility, setFacility] = useState("");
@@ -711,9 +709,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   // Nurse B must share at least one ward with Nurse A and belong to the same facility.
   const nurseBList = nurseAId
     ? facilityNurses.filter(
-        (n) =>
-          n.id !== nurseAId &&
-          splitWards(n.ward).some((w) => nurseAWards.includes(w)),
+        (n) => n.id !== nurseAId && splitWards(n.ward).some((w) => nurseAWards.includes(w)),
       )
     : [];
 

@@ -2,10 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Download,
   FileSpreadsheet,
+  FileDown,
   BarChart3,
   Clock,
   Users,
@@ -14,15 +15,22 @@ import {
   CheckCircle2,
   XCircle,
   CalendarDays,
+  Printer,
+  List,
+  Building2,
+  CalendarRange,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { useAuth } from "@/lib/auth-context";
 
 export const Route = createFileRoute("/_app/reports")({
   component: ReportsPage,
 });
+
+const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 type Nurse = {
   id: string;
@@ -49,16 +57,115 @@ type PeriodHours = {
   total_hours: number;
   total_shifts: number;
 };
+type ArchiveAssignment = {
+  nurse_id: string;
+  shift_date: string;
+  ward: string | null;
+  shift: string;
+};
+type ArchiveWindow = {
+  startDate: string;
+  endDate: string;
+  ward: string | null;
+  nurseCount: number;
+  assignmentCount: number;
+};
+
+// ── Date helpers ─────────────────────────────────────────────────────────────
 
 function todayYmd() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function fmtDate(d: string) {
+  return new Date(d + "T00:00:00").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function dateRange(start: string, end: string): string[] {
+  const out: string[] = [];
+  const cur = new Date(start + "T00:00:00");
+  const endDt = new Date(end + "T00:00:00");
+  while (cur <= endDt) {
+    out.push(
+      `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`,
+    );
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+// ── Archive grouping (mirrors approvals.tsx groupIntoWindows) ────────────────
+
+function groupArchiveWindows(rows: ArchiveAssignment[]): ArchiveWindow[] {
+  if (!rows.length) return [];
+  const byWard = new Map<string, ArchiveAssignment[]>();
+  for (const row of rows) {
+    const key = row.ward ?? "__NONE__";
+    if (!byWard.has(key)) byWard.set(key, []);
+    byWard.get(key)!.push(row);
+  }
+  const windows: ArchiveWindow[] = [];
+  for (const [wardKey, wardRows] of byWard) {
+    const ward = wardKey === "__NONE__" ? null : wardKey;
+    const sorted = [...wardRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
+    let cluster: ArchiveAssignment[] = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = cluster[cluster.length - 1];
+      const diff = Math.round(
+        (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
+      );
+      if (diff > 14) {
+        windows.push(makeArchiveWindow(cluster, ward));
+        cluster = [];
+      }
+      cluster.push(sorted[i]);
+    }
+    if (cluster.length) windows.push(makeArchiveWindow(cluster, ward));
+  }
+  return windows.sort(
+    (a, b) => b.startDate.localeCompare(a.startDate) || (a.ward ?? "").localeCompare(b.ward ?? ""),
+  );
+}
+
+function makeArchiveWindow(rows: ArchiveAssignment[], ward: string | null): ArchiveWindow {
+  const dates = rows.map((r) => r.shift_date).sort();
+  return {
+    startDate: dates[0],
+    endDate: dates[dates.length - 1],
+    ward,
+    nurseCount: new Set(rows.map((r) => r.nurse_id)).size,
+    assignmentCount: rows.length,
+  };
+}
+
+// ── PDF generation helpers (shared between staff and schedule) ───────────────
+
+function openPrintWindow(html: string) {
+  const pw = window.open("", "_blank");
+  if (!pw) {
+    toast.error("Pop-up blocked — allow pop-ups to print");
+    return;
+  }
+  pw.document.write(html);
+  pw.document.close();
+}
+
 function ReportsPage() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<"overview" | "hours" | "periods" | "leave">("overview");
+  const { canPrintStaff, canPrintSchedule } = useAuth();
+
+  const [tab, setTab] = useState<
+    "overview" | "hours" | "periods" | "leave" | "staff-dir" | "schedules"
+  >("overview");
   const [closingPeriod, setClosingPeriod] = useState(false);
+  const [dirFacility, setDirFacility] = useState<string>(FACILITIES[0]);
+  const [archiveFacility, setArchiveFacility] = useState<string>("");
+  const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
 
   const { data: nurses = [] } = useQuery<Nurse[]>({
     queryKey: ["nurses"],
@@ -101,6 +208,22 @@ function ReportsPage() {
     },
   });
 
+  // Published schedule assignments (for archive tab)
+  const { data: archiveAssignments = [], isLoading: archiveLoading } = useQuery<
+    ArchiveAssignment[]
+  >({
+    queryKey: ["archive-assignments"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_assignments")
+        .select("nurse_id, shift_date, ward, shift")
+        .eq("status", "published")
+        .order("shift_date", { ascending: false });
+      return (data ?? []) as ArchiveAssignment[];
+    },
+    enabled: tab === "schedules",
+  });
+
   // Build per-nurse hours for current period
   const nurseHoursMap = new Map<string, number>();
   const nurseShiftCountMap = new Map<string, number>();
@@ -113,6 +236,53 @@ function ReportsPage() {
 
   const totalLoggedHours = [...nurseHoursMap.values()].reduce((s, h) => s + h, 0);
   const activeNurses = nurses.filter((n) => nurseHoursMap.has(n.id));
+
+  // Staff directory: nurses by selected facility, grouped by ward
+  const facilityNurses = useMemo(
+    () => nurses.filter((n) => n.facility === dirFacility),
+    [nurses, dirFacility],
+  );
+  const nursesByWard = useMemo(() => {
+    const map = new Map<string, Nurse[]>();
+    for (const n of facilityNurses) {
+      const wardNames = n.ward
+        ? n.ward
+            .split("|")
+            .map((w) => w.trim())
+            .filter(Boolean)
+        : ["Unassigned"];
+      for (const w of wardNames) {
+        const arr = map.get(w) ?? [];
+        if (!arr.find((x) => x.id === n.id)) arr.push(n);
+        map.set(w, arr);
+      }
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [facilityNurses]);
+
+  // Archive: group published assignments into windows, filter by facility if selected
+  const archiveWindows = useMemo(() => {
+    if (!archiveAssignments.length) return [];
+    let filtered = archiveAssignments;
+    if (archiveFacility) {
+      const facilityNurseIds = new Set(
+        nurses.filter((n) => n.facility === archiveFacility).map((n) => n.id),
+      );
+      filtered = filtered.filter((a) => facilityNurseIds.has(a.nurse_id));
+    }
+    return groupArchiveWindows(filtered);
+  }, [archiveAssignments, archiveFacility, nurses]);
+
+  // Group archive windows by period start date
+  const archiveByPeriod = useMemo(() => {
+    const map = new Map<string, ArchiveWindow[]>();
+    for (const win of archiveWindows) {
+      const arr = map.get(win.startDate) ?? [];
+      arr.push(win);
+      map.set(win.startDate, arr);
+    }
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  }, [archiveWindows]);
 
   // ── Close Period ──────────────────────────────────────────────────────────
   async function closePeriod() {
@@ -129,7 +299,6 @@ function ReportsPage() {
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
 
-      // Determine period start from earliest assignment in window
       const { data: winRow } = await supabase
         .from("shift_assignments")
         .select("shift_date")
@@ -138,7 +307,6 @@ function ReportsPage() {
         .limit(1);
       const periodStart = winRow?.[0]?.shift_date ?? lb;
 
-      // Save per-nurse summaries
       for (const nurse of nurses) {
         const totalHours = nurseHoursMap.get(nurse.id) ?? 0;
         const totalShifts = nurseShiftCountMap.get(nurse.id) ?? 0;
@@ -153,7 +321,6 @@ function ReportsPage() {
           },
           { onConflict: "nurse_id,period_start" },
         );
-        // Reset hours_this_month
         await supabase.from("nurses").update({ hours_this_month: 0 }).eq("id", nurse.id);
       }
 
@@ -234,6 +401,213 @@ function ReportsPage() {
     toast.success("Exported");
   }
 
+  // ── Staff directory print ─────────────────────────────────────────────────
+  function printStaffList(ward?: string) {
+    const staffToPrint = ward
+      ? facilityNurses.filter((n) =>
+          n.ward
+            ?.split("|")
+            .map((w) => w.trim())
+            .includes(ward),
+        )
+      : facilityNurses;
+    const wardLabel = ward ? ` — ${ward}` : "";
+    const today = new Date().toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+    const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>Staff Directory — ${dirFacility}${wardLabel}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:10pt;padding:1.5cm}
+h1{font-size:13pt;margin-bottom:3px}
+p{font-size:8pt;color:#555;margin-bottom:10px}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #ccc;padding:5px 8px;text-align:left}
+th{background:#e5e7eb;font-weight:600;font-size:8pt;text-transform:uppercase;letter-spacing:.04em}
+tr:nth-child(even){background:#f9fafb}
+@media print{@page{size:A4;margin:1.5cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<h1>Staff Directory — ${dirFacility}${wardLabel}</h1>
+<p>Generated: ${today} &nbsp;·&nbsp; ${staffToPrint.length} staff</p>
+<table>
+<thead><tr><th>#</th><th>Name</th><th>Role</th><th>Ward</th></tr></thead>
+<tbody>
+${staffToPrint
+  .sort((a, b) => a.name.localeCompare(b.name))
+  .map(
+    (n, i) =>
+      `<tr><td>${i + 1}</td><td>${n.name}</td><td>${n.role}</td><td>${n.ward?.split("|")[0] ?? "—"}</td></tr>`,
+  )
+  .join("")}
+</tbody>
+</table>
+<script>window.onload=()=>{window.print()}</script>
+</body></html>`;
+    openPrintWindow(html);
+  }
+
+  function exportStaffListExcel(ward?: string) {
+    const staffToExport = ward
+      ? facilityNurses.filter((n) =>
+          n.ward
+            ?.split("|")
+            .map((w) => w.trim())
+            .includes(ward),
+        )
+      : facilityNurses;
+    const rows = staffToExport
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((n, i) => ({
+        "#": i + 1,
+        Name: n.name,
+        Role: n.role,
+        Ward: n.ward?.split("|")[0] ?? "",
+        Facility: n.facility ?? "",
+      }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 4 }, { wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Staff");
+    const slug = ward ? `-${ward.replace(/\s+/g, "-").toLowerCase()}` : "";
+    XLSX.writeFile(wb, `staff-${dirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`);
+    toast.success("Exported");
+  }
+
+  // ── Schedule archive download ─────────────────────────────────────────────
+  async function fetchScheduleData(win: ArchiveWindow) {
+    const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
+    const query = supabase
+      .from("shift_assignments")
+      .select("nurse_id, shift_date, shift")
+      .gte("shift_date", win.startDate)
+      .lte("shift_date", win.endDate)
+      .eq("status", "published");
+    const { data } =
+      win.ward !== null ? await query.eq("ward", win.ward) : await query.is("ward", null);
+    if (data) allAssignments.push(...(data as typeof allAssignments));
+    const assignMap = new Map(
+      allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date}`, a.shift]),
+    );
+    const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
+    const activeNurses = nurses.filter((n) => activeIds.has(n.id));
+    return { activeNurses, assignMap };
+  }
+
+  async function downloadSchedulePdf(win: ArchiveWindow) {
+    const key = `${win.startDate}|${win.ward ?? ""}`;
+    setArchiveDownloading(key + "-pdf");
+    try {
+      const { activeNurses, assignMap } = await fetchScheduleData(win);
+      const dates = dateRange(win.startDate, win.endDate);
+      const wardLabel = win.ward ? ` — ${win.ward}` : " — Coverage Nurses";
+      const facilityLabel = archiveFacility ? ` · ${archiveFacility}` : "";
+      const shiftBg: Record<string, string> = {
+        M: "#fef3c7",
+        N: "#e0e7ff",
+        OFF: "#f3f4f6",
+        LEAVE: "#fee2e2",
+      };
+      const dateHeaders = dates
+        .map((d) => {
+          const dt = new Date(d + "T00:00:00");
+          return `<th>${dt.toLocaleDateString("en-GB", { weekday: "short" })}<br/>${dt.getDate()}/${dt.getMonth() + 1}</th>`;
+        })
+        .join("");
+      const bodyRows = activeNurses
+        .map((n) => {
+          const cells = dates
+            .map((d) => {
+              const s = assignMap.get(`${n.id}|${d}`) ?? "";
+              return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
+            })
+            .join("");
+          return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
+        })
+        .join("");
+      const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>Nurse Rota ${win.startDate} — ${win.endDate}${facilityLabel}${wardLabel}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
+h1{font-size:11pt;margin-bottom:4px}
+p{font-size:8pt;color:#555;margin-bottom:8px}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #ccc;padding:2px 3px;text-align:center;white-space:nowrap}
+th{background:#e5e7eb;font-size:6pt;font-weight:600}
+td.nm{text-align:left;font-weight:500;min-width:80px}
+td.sm{text-align:left;color:#444;min-width:55px}
+.legend{display:flex;gap:12px;margin-top:8px;font-size:7pt}
+.lb{display:inline-block;width:10px;height:10px;border:1px solid #aaa;margin-right:2px;vertical-align:middle}
+@media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<h1>Nurse Rota${facilityLabel}${wardLabel}</h1>
+<p>${fmtDate(win.startDate)} — ${fmtDate(win.endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
+<table>
+<thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
+<tbody>${bodyRows}</tbody>
+</table>
+<div class="legend">
+<span><span class="lb" style="background:#fef3c7"></span>M Morning</span>
+<span><span class="lb" style="background:#e0e7ff"></span>N Night</span>
+<span><span class="lb" style="background:#f3f4f6"></span>OFF</span>
+<span><span class="lb" style="background:#fee2e2"></span>LEAVE</span>
+</div>
+<script>window.onload=()=>{window.print()}</script>
+</body></html>`;
+      openPrintWindow(html);
+    } catch {
+      toast.error("Failed to generate PDF");
+    } finally {
+      setArchiveDownloading(null);
+    }
+  }
+
+  async function downloadScheduleExcel(win: ArchiveWindow) {
+    const key = `${win.startDate}|${win.ward ?? ""}`;
+    setArchiveDownloading(key + "-xlsx");
+    try {
+      const { activeNurses, assignMap } = await fetchScheduleData(win);
+      const dates = dateRange(win.startDate, win.endDate);
+      const wardLabel = win.ward ? ` — ${win.ward}` : " — Coverage Nurses";
+      const facilityLabel = archiveFacility ? ` · ${archiveFacility}` : "";
+      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}${facilityLabel}${wardLabel}`;
+      const headers = [
+        "Nurse",
+        "Role",
+        "Ward",
+        ...dates.map((d) => {
+          const dt = new Date(d + "T00:00:00");
+          return `${dt.toLocaleDateString("en-GB", { weekday: "short" })} ${dt.getDate()}/${dt.getMonth() + 1}`;
+        }),
+      ];
+      const rowData = activeNurses.map((n) => [
+        n.name,
+        n.role,
+        n.ward ? n.ward.split("|")[0] : "",
+        ...dates.map((d) => assignMap.get(`${n.id}|${d}`) ?? ""),
+      ]);
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
+      ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
+      XLSX.utils.book_append_sheet(wb, ws, "Rota");
+      const slug = win.ward ? `-${win.ward.replace(/\s+/g, "-").toLowerCase()}` : "-coverage";
+      XLSX.writeFile(wb, `rota-archive-${win.startDate}-to-${win.endDate}${slug}.xlsx`);
+    } catch {
+      toast.error("Failed to generate Excel file");
+    } finally {
+      setArchiveDownloading(null);
+    }
+  }
+
+  // ── Tab styles ────────────────────────────────────────────────────────────
+
   const tabCls = (t: typeof tab) =>
     `px-4 py-2 text-sm font-medium rounded-md transition ${tab === t ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`;
 
@@ -269,6 +643,16 @@ function ReportsPage() {
         <button type="button" className={tabCls("leave")} onClick={() => setTab("leave")}>
           Leave & Requests
         </button>
+        {canPrintStaff && (
+          <button type="button" className={tabCls("staff-dir")} onClick={() => setTab("staff-dir")}>
+            Staff Directory
+          </button>
+        )}
+        {canPrintSchedule && (
+          <button type="button" className={tabCls("schedules")} onClick={() => setTab("schedules")}>
+            Schedule Archive
+          </button>
+        )}
       </div>
 
       {/* ── Overview ─────────────────────────────────────────────────────── */}
@@ -414,7 +798,6 @@ function ReportsPage() {
           const approved = leaveOnly.filter((l: { status: string }) => l.status === "Approved");
           const rejected = leaveOnly.filter((l: { status: string }) => l.status === "Rejected");
 
-          // Group by leave type
           const byType: Record<string, number> = {};
           for (const l of leaveOnly) {
             byType[l.type] = (byType[l.type] ?? 0) + 1;
@@ -422,7 +805,6 @@ function ReportsPage() {
 
           return (
             <>
-              {/* Summary cards */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
                 <Stat icon={PlaneTakeoff} label="Total Leave Requests" value={leaveOnly.length} />
                 <Stat icon={Clock} label="Pending" value={pending.length} />
@@ -431,7 +813,6 @@ function ReportsPage() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-                {/* Leave by type */}
                 <div className="bg-card border rounded-xl p-5 shadow-soft">
                   <h2 className="font-semibold mb-4">Leave by Type</h2>
                   {Object.keys(byType).length === 0 ? (
@@ -460,7 +841,6 @@ function ReportsPage() {
                   )}
                 </div>
 
-                {/* Shift switch requests */}
                 <div className="bg-card border rounded-xl p-5 shadow-soft">
                   <div className="flex items-center gap-2 mb-4">
                     <CalendarDays className="h-4 w-4 text-muted-foreground" />
@@ -509,7 +889,6 @@ function ReportsPage() {
                 </div>
               </div>
 
-              {/* Full leave table */}
               <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
@@ -611,6 +990,214 @@ function ReportsPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Staff Directory ───────────────────────────────────────────────── */}
+      {tab === "staff-dir" && (
+        <div className="space-y-5">
+          {/* Facility selector */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+            {FACILITIES.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setDirFacility(f)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                  dirFacility === f
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card hover:bg-muted border-border"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => exportStaffListExcel()}
+                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" /> Excel
+              </button>
+              <button
+                type="button"
+                onClick={() => printStaffList()}
+                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+              >
+                <Printer className="h-3.5 w-3.5" /> Print All
+              </button>
+            </div>
+          </div>
+
+          {facilityNurses.length === 0 ? (
+            <EmptyState
+              icon={<Users className="h-6 w-6" />}
+              title={`No staff in ${dirFacility}`}
+              description="Assign nurses to this facility from the Staff page."
+            />
+          ) : (
+            <div className="space-y-4">
+              {nursesByWard.map(([ward, wardNurses]) => (
+                <div key={ward} className="bg-card border rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b bg-muted/30 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <List className="h-4 w-4 text-muted-foreground" />
+                      <h3 className="text-sm font-semibold">{ward}</h3>
+                      <span className="text-xs text-muted-foreground">
+                        · {wardNurses.length} staff
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => exportStaffListExcel(ward)}
+                        className="inline-flex items-center gap-1 h-7 px-2 rounded border bg-card text-xs hover:bg-muted"
+                      >
+                        <FileSpreadsheet className="h-3 w-3 text-emerald-600" /> Excel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => printStaffList(ward)}
+                        className="inline-flex items-center gap-1 h-7 px-2 rounded border bg-card text-xs hover:bg-muted"
+                      >
+                        <Printer className="h-3 w-3" /> Print
+                      </button>
+                    </div>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/20 text-xs uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-4 py-2.5 font-medium w-10">#</th>
+                        <th className="text-left px-4 py-2.5 font-medium">Name</th>
+                        <th className="text-left px-4 py-2.5 font-medium">Role</th>
+                        <th className="text-left px-4 py-2.5 font-medium">Ward(s)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {wardNurses
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((n, i) => (
+                          <tr key={n.id} className="border-t hover:bg-muted/20">
+                            <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+                              {i + 1}
+                            </td>
+                            <td className="px-4 py-2.5 font-medium">{n.name}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground">{n.role}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground">{n.ward ?? "—"}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Schedule Archive ──────────────────────────────────────────────── */}
+      {tab === "schedules" && (
+        <div className="space-y-5">
+          {/* Facility filter */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+            <button
+              type="button"
+              onClick={() => setArchiveFacility("")}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                archiveFacility === ""
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card hover:bg-muted border-border"
+              }`}
+            >
+              All Facilities
+            </button>
+            {FACILITIES.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setArchiveFacility(f)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                  archiveFacility === f
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card hover:bg-muted border-border"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {archiveLoading ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
+          ) : archiveByPeriod.length === 0 ? (
+            <EmptyState
+              icon={<CalendarRange className="h-6 w-6" />}
+              title="No published schedules"
+              description="Published rotas appear here for reference and download."
+            />
+          ) : (
+            <div className="space-y-8">
+              {archiveByPeriod.map(([periodStart, periodWins]) => (
+                <div key={periodStart}>
+                  {/* Period header */}
+                  <div className="flex items-center gap-2 mb-3">
+                    <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <h2 className="text-sm font-semibold">
+                      {fmtDate(periodStart)} — {fmtDate(periodWins[0].endDate)}
+                    </h2>
+                    <span className="text-xs text-muted-foreground">
+                      · {periodWins.length} ward{periodWins.length !== 1 ? "s" : ""}
+                    </span>
+                    <div className="flex-1 h-px bg-border ml-1" />
+                  </div>
+
+                  {/* Ward cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {periodWins.map((win) => {
+                      const key = `${win.startDate}|${win.ward ?? ""}`;
+                      const isDownloading = archiveDownloading?.startsWith(key);
+                      return (
+                        <div
+                          key={key}
+                          className="bg-card border rounded-xl p-4 flex flex-col gap-3"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold">{win.ward ?? "Coverage Nurses"}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {win.nurseCount} nurses · {win.assignmentCount} assignments
+                            </p>
+                          </div>
+                          <div className="flex gap-2 mt-auto">
+                            <button
+                              type="button"
+                              disabled={!!isDownloading}
+                              onClick={() => downloadScheduleExcel(win)}
+                              className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                            >
+                              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                              {archiveDownloading === key + "-xlsx" ? "…" : "Excel"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!!isDownloading}
+                              onClick={() => downloadSchedulePdf(win)}
+                              className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                            >
+                              <FileDown className="h-3.5 w-3.5 text-red-500" />
+                              {archiveDownloading === key + "-pdf" ? "…" : "PDF"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

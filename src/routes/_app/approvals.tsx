@@ -301,16 +301,30 @@ function ApprovalsPage() {
     });
   }, [windows, windowMeta, effectiveFacility]);
 
-  // Group filtered windows by period (startDate), newest period first.
+  // For each ward, only the most recent period belongs in approvals.
+  // Older fully-published periods are archived in Reports.
+  const currentPeriodWindows = useMemo(() => {
+    const latestByWard = new Map<string, RotaWindow>();
+    for (const win of facilityWindows) {
+      const wardKey = win.ward ?? "__COVERAGE__";
+      const existing = latestByWard.get(wardKey);
+      if (!existing || win.startDate > existing.startDate) {
+        latestByWard.set(wardKey, win);
+      }
+    }
+    return [...latestByWard.values()];
+  }, [facilityWindows]);
+
+  // Group current-period windows by period start, newest first.
   const windowsByPeriod = useMemo(() => {
     const map = new Map<string, RotaWindow[]>();
-    for (const win of facilityWindows) {
+    for (const win of currentPeriodWindows) {
       const arr = map.get(win.startDate) ?? [];
       arr.push(win);
       map.set(win.startDate, arr);
     }
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-  }, [facilityWindows]);
+  }, [currentPeriodWindows]);
 
   // ── DB actions ─────────────────────────────────────────────────────────────
 
@@ -919,7 +933,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
           {/* Periods for the selected facility */}
           {windowsByPeriod.length === 0 ? (
             <p className="py-12 text-center text-sm text-muted-foreground">
-              No schedules for {effectiveFacility}.
+              No active schedules for {effectiveFacility}. Previous published periods are in{" "}
+              <span className="font-medium text-foreground">Reports → Schedule Archive</span>.
             </p>
           ) : (
             <div className="space-y-8">

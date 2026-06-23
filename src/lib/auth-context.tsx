@@ -40,6 +40,8 @@ interface AuthCtx {
   canApproveShiftSwitch: boolean;
   canCreateLogin: boolean;
   canEditTargetHours: boolean;
+  canPrintStaff: boolean;
+  canPrintSchedule: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -169,6 +171,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canApproveShiftSwitch: isInActiveRole("admin", "cno"),
     canCreateLogin: ar === "admin",
     canEditTargetHours: ar !== null && capabilityRoles("edit_target_hours", ["admin"]).includes(ar),
+    canPrintStaff:
+      ar !== null &&
+      capabilityRoles("print_staff_list", [
+        "admin",
+        "cno",
+        "chief_matron",
+        "head_nurse",
+        "hr_admin",
+      ]).includes(ar),
+    canPrintSchedule:
+      ar !== null &&
+      capabilityRoles("print_schedule", [
+        "admin",
+        "cno",
+        "chief_matron",
+        "head_nurse",
+        "hr_admin",
+      ]).includes(ar),
     signOut: async () => {
       if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
       setActiveRole(null);

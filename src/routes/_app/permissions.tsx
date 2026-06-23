@@ -98,6 +98,18 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     roles: ROLES,
   },
 
+  // ── Printing ─────────────────────────────────────────────────────────────
+  {
+    key: "print_staff_list",
+    label: "Print Staff Directory (by facility / ward)",
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+  },
+  {
+    key: "print_schedule",
+    label: "Print / Download Published Schedule",
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+  },
+
   // ── Reports, Audit & Access ───────────────────────────────────────────────
   {
     key: "view_reports",
