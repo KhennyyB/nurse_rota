@@ -1,5 +1,6 @@
 import { Link, Outlet, useRouterState, useNavigate, redirect } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import {
   LayoutDashboard,
   CalendarDays,
@@ -65,6 +66,19 @@ export function AppShell() {
   // Auto-end any overdue shifts server-side on every app load (safety net for closed browsers)
   useEffect(() => {
     void supabase.rpc("auto_end_overdue_shifts");
+  }, []);
+
+  // Auto-close the period at 8am the day after the last published shift ends
+  useEffect(() => {
+    void supabase.rpc("auto_close_period").then(({ data }) => {
+      const result = data as { closed: boolean; period_start?: string; period_end?: string } | null;
+      if (result?.closed) {
+        toast.success(
+          `Period ${result.period_start} → ${result.period_end} has been automatically closed and archived.`,
+          { duration: 8000 },
+        );
+      }
+    });
   }, []);
 
   // Same-tab / same-browser cache updates (instant)

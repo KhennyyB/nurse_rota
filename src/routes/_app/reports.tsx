@@ -621,10 +621,11 @@ td.sm{text-align:left;color:#444;min-width:55px}
             type="button"
             disabled={closingPeriod}
             onClick={closePeriod}
+            title="Periods close automatically at 8 am the day after the last shift. Use this only to close manually."
             className="inline-flex items-center gap-2 h-10 px-4 rounded-md border bg-card text-sm hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
           >
             <Archive className="h-4 w-4" />
-            {closingPeriod ? "Closing…" : "Close Period"}
+            {closingPeriod ? "Closing…" : "Force Close Period"}
           </button>
         }
       />
@@ -959,7 +960,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
             <EmptyState
               icon={<Archive className="h-6 w-6" />}
               title="No archived periods"
-              description='Use "Close Period" at the end of each 28-day cycle to save a snapshot here.'
+              description="Periods close automatically at 8 am the day after the last published shift. Archived periods appear here."
             />
           ) : (
             <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
