@@ -557,7 +557,7 @@ function StaffPage() {
       )}
       {showSetHours && (
         <SetTargetHoursModal
-          currentHours={nurses[0]?.target_hours ?? 160}
+          currentHours={nurses[0]?.target_hours ?? 180}
           onClose={() => setShowSetHours(false)}
         />
       )}
