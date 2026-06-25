@@ -23,6 +23,7 @@ type LeaveRow = {
   to_date: string;
   status: "Pending" | "Approved" | "Rejected";
   reason: string | null;
+  review_note: string | null;
   created_at: string;
 };
 
@@ -33,13 +34,17 @@ const SWITCH_PREFIX = "SHIFT_SWITCH|";
 function parseSwitch(row: LeaveRow) {
   if (!row.reason?.startsWith(SWITCH_PREFIX)) return null;
   const parts = row.reason.slice(SWITCH_PREFIX.length).split("|");
-  return {
-    nurseBId: parts[0] ?? "",
-    nurseBName: parts[1] ?? "",
-    shiftA: parts[2] ?? "",
-    shiftB: parts[3] ?? "",
-    date: row.from_date,
-  };
+  const nurseBId = parts[0] ?? "";
+  const nurseBName = parts[1] ?? "";
+  const shiftA = parts[2] ?? "";
+  const shiftB = parts[3] ?? "";
+  let interWard = false;
+  let note = "";
+  for (let i = 4; i < parts.length; i++) {
+    if (parts[i] === "INTER_WARD") interWard = true;
+    else if (parts[i].startsWith("NOTE:")) note = parts.slice(i).join("|").slice(5);
+  }
+  return { nurseBId, nurseBName, shiftA, shiftB, date: row.from_date, interWard, note };
 }
 
 function isShiftSwitch(row: LeaveRow) {
@@ -139,7 +144,7 @@ function LeavePage() {
     qc.invalidateQueries({ queryKey: ["leave"] });
   }
 
-  async function reviewSwitch(l: LeaveRow, status: "Approved" | "Rejected") {
+  async function reviewSwitch(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
     if (status === "Approved") {
       const sw = parseSwitch(l);
       if (!sw) return toast.error("Invalid shift switch data");
@@ -204,7 +209,12 @@ function LeavePage() {
 
     const { error } = await supabase
       .from("leave_requests")
-      .update({ status, reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
+      .update({
+        status,
+        reviewed_by: user?.id,
+        reviewed_at: new Date().toISOString(),
+        review_note: note || null,
+      })
       .eq("id", l.id);
     if (error) return toast.error(error.message);
     toast.success(
@@ -458,96 +468,183 @@ function SwitchTable({
 }: {
   rows: LeaveRow[];
   canApprove: boolean;
-  onReview: (l: LeaveRow, s: "Approved" | "Rejected") => void;
+  onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
 }) {
+  const [reviewing, setReviewing] = useState<{
+    row: LeaveRow;
+    status: "Approved" | "Rejected";
+  } | null>(null);
+  const [reviewNote, setReviewNote] = useState("");
+
+  function submitReview() {
+    if (!reviewing) return;
+    onReview(reviewing.row, reviewing.status, reviewNote);
+    setReviewing(null);
+    setReviewNote("");
+  }
+
   return (
-    <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="text-left font-semibold px-4 py-3">Nurse A</th>
-              <th className="text-left font-semibold px-4 py-3">Nurse B</th>
-              <th className="text-left font-semibold px-4 py-3">Date</th>
-              <th className="text-left font-semibold px-4 py-3">Shifts</th>
-              <th className="text-left font-semibold px-4 py-3">Status</th>
-              {canApprove && <th className="text-right font-semibold px-4 py-3">Action</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+    <>
+      <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <td
-                  colSpan={canApprove ? 6 : 5}
-                  className="px-4 py-8 text-center text-sm text-muted-foreground"
-                >
-                  No switch requests match the current filter.
-                </td>
+                <th className="text-left font-semibold px-4 py-3">Nurse A</th>
+                <th className="text-left font-semibold px-4 py-3">Nurse B</th>
+                <th className="text-left font-semibold px-4 py-3">Date</th>
+                <th className="text-left font-semibold px-4 py-3">Shifts</th>
+                <th className="text-left font-semibold px-4 py-3">Reason / Note</th>
+                <th className="text-left font-semibold px-4 py-3">Status</th>
+                {canApprove && <th className="text-right font-semibold px-4 py-3">Action</th>}
               </tr>
-            ) : null}
-            {rows.map((l) => {
-              const sw = parseSwitch(l);
-              return (
-                <tr key={l.id} className="border-t hover:bg-muted/30">
-                  <td className="px-4 py-3 font-medium">{l.nurse_name}</td>
-                  <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
-                  <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                    {sw?.date ?? l.from_date}
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={canApprove ? 7 : 6}
+                    className="px-4 py-8 text-center text-sm text-muted-foreground"
+                  >
+                    No switch requests match the current filter.
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                    {sw ? (
-                      <span className="inline-flex items-center gap-1">
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                          {sw.shiftA || "—"}
-                        </span>
-                        <ArrowLeftRight className="h-3 w-3" />
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                          {sw.shiftB || "—"}
-                        </span>
-                      </span>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
-                    >
-                      {l.status}
-                    </span>
-                  </td>
-                  {canApprove && (
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1 justify-end">
-                        <button
-                          type="button"
-                          aria-label="Approve shift switch"
-                          onClick={() => onReview(l, "Approved")}
-                          disabled={l.status !== "Pending"}
-                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
-                          title="Approve and apply to published rota"
-                        >
-                          <Check className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Reject shift switch"
-                          onClick={() => onReview(l, "Rejected")}
-                          disabled={l.status !== "Pending"}
-                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  )}
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              ) : null}
+              {rows.map((l) => {
+                const sw = parseSwitch(l);
+                return (
+                  <tr key={l.id} className="border-t hover:bg-muted/30">
+                    <td className="px-4 py-3 font-medium">{l.nurse_name}</td>
+                    <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                      {sw?.date ?? l.from_date}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                      {sw ? (
+                        <span className="inline-flex items-center gap-1">
+                          {sw.interWard && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                              Inter-Ward
+                            </span>
+                          )}
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            {sw.shiftA || "—"}
+                          </span>
+                          <ArrowLeftRight className="h-3 w-3" />
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            {sw.shiftB || "—"}
+                          </span>
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 max-w-[180px]">
+                      {sw?.note && (
+                        <p className="text-xs text-muted-foreground truncate" title={sw.note}>
+                          {sw.note}
+                        </p>
+                      )}
+                      {l.review_note && (
+                        <p
+                          className="text-xs text-muted-foreground/70 truncate mt-0.5 italic"
+                          title={`Review note: ${l.review_note}`}
+                        >
+                          Review: {l.review_note}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+                      >
+                        {l.status}
+                      </span>
+                    </td>
+                    {canApprove && (
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1 justify-end">
+                          <button
+                            type="button"
+                            aria-label="Approve shift switch"
+                            onClick={() => {
+                              setReviewing({ row: l, status: "Approved" });
+                              setReviewNote("");
+                            }}
+                            disabled={l.status !== "Pending"}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                            title="Approve and apply to published rota"
+                          >
+                            <Check className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Reject shift switch"
+                            onClick={() => {
+                              setReviewing({ row: l, status: "Rejected" });
+                              setReviewNote("");
+                            }}
+                            disabled={l.status !== "Pending"}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+
+      {/* Review note dialog */}
+      {reviewing && (
+        <Modal
+          title={reviewing.status === "Approved" ? "Approve switch" : "Reject switch"}
+          onClose={() => setReviewing(null)}
+        >
+          <p className="text-sm text-muted-foreground mb-4">
+            {reviewing.status === "Approved"
+              ? "Add a note before approving this shift switch (optional)."
+              : "Provide a reason for rejecting this shift switch."}
+          </p>
+          <textarea
+            autoFocus
+            value={reviewNote}
+            onChange={(e) => setReviewNote(e.target.value)}
+            rows={3}
+            placeholder={
+              reviewing.status === "Approved" ? "Approval note…" : "Reason for rejection…"
+            }
+            className="w-full px-3 py-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => setReviewing(null)}
+              className="h-9 px-4 rounded-md border bg-card text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={reviewing.status === "Rejected" && !reviewNote.trim()}
+              onClick={submitReview}
+              className={`h-9 px-4 rounded-md text-sm font-medium disabled:opacity-40 ${
+                reviewing.status === "Approved"
+                  ? "bg-success text-white hover:bg-success/90"
+                  : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              }`}
+            >
+              {reviewing.status === "Approved" ? "Confirm approval" : "Confirm rejection"}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -561,6 +658,24 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     queryFn: async () =>
       (await supabase.from("nurses").select("id, name").order("name")).data ?? [],
   });
+
+  const { data: rotaPublished = false } = useQuery({
+    queryKey: ["leave-rota-published"],
+    queryFn: async () => {
+      const today = new Date().toISOString().split("T")[0];
+      const { data } = await supabase
+        .from("shift_assignments")
+        .select("id")
+        .eq("status", "published")
+        .gte("shift_date", today)
+        .limit(1);
+      return (data?.length ?? 0) > 0;
+    },
+  });
+
+  const allowedTypes = rotaPublished
+    ? ["Sick", "Emergency"]
+    : ["Sick", "Annual", "Emergency", "Public Holiday"];
 
   const [type, setType] = useState("Annual");
   const [from, setFrom] = useState("");
@@ -595,17 +710,23 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New leave request" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
+        {rotaPublished && (
+          <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
+            The rota is currently published. Only <strong>Sick</strong> and{" "}
+            <strong>Emergency</strong> leave can be requested at this time.
+          </div>
+        )}
         <div>
           <label htmlFor="leave-type" className="text-sm font-medium">
             Type
           </label>
           <select
             id="leave-type"
-            value={type}
+            value={allowedTypes.includes(type) ? type : allowedTypes[0]}
             onChange={(e) => setType(e.target.value)}
             className={inputCls}
           >
-            {["Sick", "Annual", "Emergency", "Public Holiday"].map((t) => (
+            {allowedTypes.map((t) => (
               <option key={t}>{t}</option>
             ))}
           </select>
@@ -693,9 +814,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       (await supabase.from("nurses").select("id, name, ward, facility").order("name")).data ?? [],
   });
 
+  const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
   const [facility, setFacility] = useState("");
   const [nurseAId, setNurseAId] = useState("");
   const [nurseBId, setNurseBId] = useState("");
+  const [wardB, setWardB] = useState("");
   const [date, setDate] = useState("");
   const [reason, setReason] = useState("");
   const [shiftA, setShiftA] = useState("");
@@ -706,11 +829,17 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const facilityNurses = nurses.filter((n) => n.facility === facility);
   const nurseA = nurses.find((n) => n.id === nurseAId);
   const nurseAWards = splitWards(nurseA?.ward);
-  // Nurse B must share at least one ward with Nurse A and belong to the same facility.
+  const allFacilityWards = [...new Set(facilityNurses.flatMap((n) => splitWards(n.ward)))].sort();
+  const wardBOptions = allFacilityWards.filter((w) => !nurseAWards.includes(w));
+
   const nurseBList = nurseAId
-    ? facilityNurses.filter(
-        (n) => n.id !== nurseAId && splitWards(n.ward).some((w) => nurseAWards.includes(w)),
-      )
+    ? switchType === "inter-ward"
+      ? wardB
+        ? facilityNurses.filter((n) => n.id !== nurseAId && splitWards(n.ward).includes(wardB))
+        : []
+      : facilityNurses.filter(
+          (n) => n.id !== nurseAId && splitWards(n.ward).some((w) => nurseAWards.includes(w)),
+        )
     : [];
 
   async function fetchShift(nurseId: string, setShift: (s: string) => void) {
@@ -732,12 +861,22 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     if (!shiftB) return toast.error("Could not find published shift for Nurse B on that date");
     if (shiftA === "LEAVE" && !coverShift)
       return toast.error("Nurse A is on leave — please select the shift type that needs covering");
+    if (!reason.trim()) return toast.error("Please provide a reason for this shift switch");
+
+    // 24-hour rule: the shift must start more than 24 hours from now.
+    const shiftStart = new Date(`${date}T08:00:00`);
+    const hoursUntil = (shiftStart.getTime() - Date.now()) / 3_600_000;
+    if (hoursUntil < 24) {
+      return toast.error(
+        `Shift switch cannot be requested less than 24 hours before the shift (${Math.max(0, Math.floor(hoursUntil))}h remaining). Please contact the CNO directly.`,
+      );
+    }
 
     setBusy(true);
     const nurseB = nurses.find((n) => n.id === nurseBId);
-    // When Nurse A is on LEAVE, encode the manually-selected coverage shift instead.
     const effectiveShiftA = shiftA === "LEAVE" ? coverShift : shiftA;
-    const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${effectiveShiftA}|${shiftB}`;
+    const flags = switchType === "inter-ward" ? "|INTER_WARD" : "";
+    const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${effectiveShiftA}|${shiftB}${flags}|NOTE:${reason.trim()}`;
 
     const { error } = await supabase.from("leave_requests").insert({
       nurse_id: nurseAId,
@@ -746,7 +885,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       type: "Swap",
       from_date: date,
       to_date: date,
-      reason: reason ? `${reasonEncoded}|NOTE:${reason}` : reasonEncoded,
+      reason: reasonEncoded,
     });
     setBusy(false);
     if (error) return toast.error(error.message);
@@ -763,8 +902,35 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     <Modal title="Request shift switch" onClose={onClose}>
       <p className="text-xs text-muted-foreground mb-4">
         Switches are applied to the <strong>published rota</strong> only after CNO approval.
+        Requests must be submitted at least <strong>24 hours</strong> before the shift.
       </p>
       <form onSubmit={submit} className="space-y-4">
+        {/* Switch type */}
+        <div>
+          <p className="text-sm font-medium mb-1.5">Switch type</p>
+          <div className="flex gap-2">
+            {(["same-ward", "inter-ward"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => {
+                  setSwitchType(t);
+                  setNurseBId("");
+                  setWardB("");
+                  setShiftB("");
+                }}
+                className={`h-9 px-4 rounded-md text-sm font-medium border transition-colors ${
+                  switchType === t
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card border-border hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                {t === "same-ward" ? "Same Ward" : "Inter Ward"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Facility */}
         <div>
           <label htmlFor="sw-facility" className="text-sm font-medium">
@@ -778,6 +944,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               setFacility(e.target.value);
               setNurseAId("");
               setNurseBId("");
+              setWardB("");
               setShiftA("");
               setShiftB("");
             }}
@@ -871,7 +1038,35 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        {/* Nurse B — filtered by Nurse A's ward(s) */}
+        {/* Ward B selector — inter-ward only */}
+        {switchType === "inter-ward" && (
+          <div>
+            <label htmlFor="sw-ward-b" className="text-sm font-medium">
+              Ward B (destination) <span className="text-destructive">*</span>
+            </label>
+            <select
+              id="sw-ward-b"
+              required
+              disabled={!nurseAId}
+              value={wardB}
+              onChange={(e) => {
+                setWardB(e.target.value);
+                setNurseBId("");
+                setShiftB("");
+              }}
+              className={inputCls}
+            >
+              <option value="">{nurseAId ? "Select ward…" : "Select Nurse A first…"}</option>
+              {wardBOptions.map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Nurse B */}
         <div>
           <label htmlFor="sw-nurse-b" className="text-sm font-medium">
             Nurse B <span className="text-destructive">*</span>
@@ -879,7 +1074,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <select
             id="sw-nurse-b"
             required
-            disabled={!nurseAId}
+            disabled={switchType === "inter-ward" ? !wardB : !nurseAId}
             value={nurseBId}
             onChange={(e) => {
               setNurseBId(e.target.value);
@@ -888,16 +1083,26 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             }}
             className={inputCls}
           >
-            <option value="">{nurseAId ? "Select nurse…" : "Select Nurse A first…"}</option>
+            <option value="">
+              {switchType === "inter-ward"
+                ? wardB
+                  ? "Select nurse…"
+                  : "Select Ward B first…"
+                : nurseAId
+                  ? "Select nurse…"
+                  : "Select Nurse A first…"}
+            </option>
             {nurseBList.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name}
               </option>
             ))}
           </select>
-          {nurseAId && nurseBList.length === 0 && (
+          {nurseAId && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
             <p className="mt-1 text-xs text-muted-foreground">
-              No other nurses found in the same ward.
+              {switchType === "inter-ward"
+                ? "No nurses found in the selected ward."
+                : "No other nurses found in the same ward."}
             </p>
           )}
           {shiftB && (
@@ -910,16 +1115,18 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        {/* Optional note */}
+        {/* Reason — required */}
         <div>
           <label htmlFor="sw-reason" className="text-sm font-medium">
-            Reason / note (optional)
+            Reason <span className="text-destructive">*</span>
           </label>
           <textarea
             id="sw-reason"
+            required
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
+            placeholder="Provide a reason for this shift switch…"
             className="w-full px-3 py-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
@@ -939,6 +1146,8 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               !nurseAId ||
               !nurseBId ||
               !date ||
+              !reason.trim() ||
+              (switchType === "inter-ward" && !wardB) ||
               (shiftA === "LEAVE" && !coverShift)
             }
             type="submit"

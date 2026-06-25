@@ -433,14 +433,12 @@ function scheduleGroup(
   const idRank = new Map(byId.map((n, i) => [n.id, i]));
 
   // Assignment order: higher target_hours → higher-hours block.
-  // Within equal target_hours, rotate by periodsElapsed for long-run fairness.
-  const periodsElapsed = days > 0 ? Math.round(phase / days) : 0;
+  // Tiebreaker is the stable ID rank — never rotated between periods so that
+  // each nurse stays in the same cycle block across periods (continuity fix).
   const forAssignment = [...byId].sort((a, b) => {
     const tDiff = (b.target_hours ?? 0) - (a.target_hours ?? 0);
     if (tDiff !== 0) return tDiff;
-    const ra = ((idRank.get(a.id) ?? 0) + periodsElapsed) % N;
-    const rb = ((idRank.get(b.id) ?? 0) + periodsElapsed) % N;
-    return ra - rb;
+    return (idRank.get(a.id) ?? 0) - (idRank.get(b.id) ?? 0);
   });
 
   // Each nurse's sorted rank i maps to the standard stagger slot, then to a

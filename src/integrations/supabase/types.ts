@@ -49,6 +49,7 @@ export type Database = {
           requested_by: string | null;
           reviewed_at: string | null;
           reviewed_by: string | null;
+          review_note: string | null;
           status: Database["public"]["Enums"]["leave_status"];
           to_date: string;
           type: Database["public"]["Enums"]["leave_type"];
@@ -63,6 +64,7 @@ export type Database = {
           requested_by?: string | null;
           reviewed_at?: string | null;
           reviewed_by?: string | null;
+          review_note?: string | null;
           status?: Database["public"]["Enums"]["leave_status"];
           to_date: string;
           type: Database["public"]["Enums"]["leave_type"];
@@ -77,6 +79,7 @@ export type Database = {
           requested_by?: string | null;
           reviewed_at?: string | null;
           reviewed_by?: string | null;
+          review_note?: string | null;
           status?: Database["public"]["Enums"]["leave_status"];
           to_date?: string;
           type?: Database["public"]["Enums"]["leave_type"];
