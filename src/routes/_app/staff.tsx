@@ -16,9 +16,11 @@ import {
   KeyRound,
   CheckCircle2,
   Clock,
+  UserX,
+  UserCheck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { adminCreateUser } from "@/integrations/supabase/admin-client";
+import { adminCreateUser, adminBanUser, adminUnbanUser } from "@/integrations/supabase/admin-client";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -100,16 +102,57 @@ function StaffPage() {
     },
   });
 
-  // Nurse names that already have a login (matched by full_name in profiles).
-  const { data: profileNames = [] } = useQuery({
+  const { data: profileRows = [] } = useQuery({
     queryKey: ["profile-names"],
     enabled: canCreateLogin,
     queryFn: async () => {
-      const { data } = await supabase.from("profiles").select("full_name");
-      return (data ?? []).map((p) => p.full_name?.toLowerCase() ?? "").filter(Boolean);
+      const { data } = await supabase.from("profiles").select("id, full_name, is_active");
+      return data ?? [];
     },
   });
-  const hasLogin = (name: string) => profileNames.includes(name.toLowerCase());
+  const profileMap = useMemo(
+    () =>
+      new Map(
+        profileRows.map((p) => [
+          p.full_name?.toLowerCase() ?? "",
+          { id: p.id, isActive: p.is_active },
+        ]),
+      ),
+    [profileRows],
+  );
+  const profileInfo = (name: string) => profileMap.get(name.toLowerCase());
+
+  async function deactivateLogin(userId: string) {
+    if (!confirm("Deactivate this login? The user will not be able to log in until reactivated."))
+      return;
+    try {
+      await adminBanUser(userId);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_active: false })
+        .eq("id", userId);
+      if (error) throw new Error(error.message);
+      void qc.invalidateQueries({ queryKey: ["profile-names"] });
+      toast.success("Login deactivated");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function reactivateLogin(userId: string) {
+    try {
+      await adminUnbanUser(userId);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_active: true })
+        .eq("id", userId);
+      if (error) throw new Error(error.message);
+      void qc.invalidateQueries({ queryKey: ["profile-names"] });
+      toast.success("Login reactivated");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
 
   const { data: wards = [] } = useQuery<{ name: string; facility: string | null }[]>({
     queryKey: ["wards"],
@@ -403,23 +446,59 @@ function StaffPage() {
                     </td>
                     {canCreateLogin && (
                       <td className="px-4 py-3 text-center">
-                        {hasLogin(n.name) ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[11px] text-success font-medium"
-                            title="Login exists"
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Active
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setCreateLoginNurse(n)}
-                            className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11px] hover:bg-primary hover:text-primary-foreground hover:border-primary transition"
-                            title="Create login for this nurse"
-                          >
-                            <KeyRound className="h-3 w-3" /> Create
-                          </button>
-                        )}
+                        {(() => {
+                          const info = profileInfo(n.name);
+                          if (!info) {
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setCreateLoginNurse(n)}
+                                className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11px] hover:bg-primary hover:text-primary-foreground hover:border-primary transition"
+                                title="Create login for this nurse"
+                              >
+                                <KeyRound className="h-3 w-3" /> Create
+                              </button>
+                            );
+                          }
+                          if (info.isActive) {
+                            return (
+                              <div className="inline-flex items-center gap-1.5">
+                                <span
+                                  className="inline-flex items-center gap-1 text-[11px] text-success font-medium"
+                                  title="Login active"
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5" /> Active
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => void deactivateLogin(info.id)}
+                                  className="h-6 px-1.5 rounded border text-[10px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive hover:border-destructive/40 transition"
+                                  title="Deactivate login"
+                                >
+                                  <UserX className="h-3 w-3" />
+                                </button>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="inline-flex items-center gap-1.5">
+                              <span
+                                className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium"
+                                title="Login deactivated"
+                              >
+                                <UserX className="h-3.5 w-3.5" /> Inactive
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => void reactivateLogin(info.id)}
+                                className="h-6 px-1.5 rounded border text-[10px] text-muted-foreground hover:bg-success/10 hover:text-success hover:border-success/40 transition"
+                                title="Reactivate login"
+                              >
+                                <UserCheck className="h-3 w-3" />
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </td>
                     )}
                     {canManageStaff && (

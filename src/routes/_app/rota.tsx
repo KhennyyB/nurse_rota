@@ -157,6 +157,11 @@ function RotaPage() {
     ward: "",
     rotateInterns: false,
   });
+  // Pending leave warning: null = not checked yet, [] = checked + clear, [...] = warning shown
+  const [genPendingLeaves, setGenPendingLeaves] = useState<
+    { name: string; from: string; to: string }[]
+  >([]);
+  const [genLeaveChecked, setGenLeaveChecked] = useState(false);
 
   // Extra shifts added by safety enforcement during the last auto-generate run.
   const [extraShifts, setExtraShifts] = useState<ExtraShift[]>([]);
@@ -514,6 +519,34 @@ function RotaPage() {
     const genStart = new Date(genForm.startDate + "T00:00:00");
     const genEnd = new Date(genStart);
     genEnd.setDate(genEnd.getDate() + DAYS - 1);
+
+    // Pre-flight: check for pending leave requests that overlap this period.
+    // Skip if the user already confirmed ("Continue anyway").
+    if (!genLeaveChecked) {
+      const facilityIds = nurses
+        .filter((n) => n.facility === genForm.facility)
+        .map((n) => n.id)
+        .filter(Boolean);
+      if (facilityIds.length > 0) {
+        const { data: pending } = await supabase
+          .from("leave_requests")
+          .select("nurse_name, from_date, to_date")
+          .eq("status", "Pending")
+          .in("nurse_id", facilityIds.slice(0, 200))
+          .lte("from_date", ymd(genEnd))
+          .gte("to_date", ymd(genStart));
+        if (pending && pending.length > 0) {
+          setGenPendingLeaves(
+            pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
+          );
+          return; // Wait for user decision in the dialog
+        }
+      }
+    }
+
+    // Reset the leave check state so subsequent opens re-check
+    setGenLeaveChecked(false);
+    setGenPendingLeaves([]);
 
     const isWardRun = !!genForm.ward;
     const facilityNurses = nurses.filter((n) => n.facility === genForm.facility);
@@ -1467,7 +1500,16 @@ function RotaPage() {
       )}
 
       {/* Auto-generate dialog */}
-      <Dialog open={genOpen} onOpenChange={setGenOpen}>
+      <Dialog
+        open={genOpen}
+        onOpenChange={(open) => {
+          setGenOpen(open);
+          if (!open) {
+            setGenPendingLeaves([]);
+            setGenLeaveChecked(false);
+          }
+        }}
+      >
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Generate 28-day schedule</DialogTitle>
@@ -1550,6 +1592,51 @@ function RotaPage() {
               </span>
             </label>
           </div>
+
+          {/* Pending leave warning */}
+          {genPendingLeaves.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 p-3 text-xs space-y-2">
+              <p className="font-semibold text-amber-800 dark:text-amber-300">
+                {genPendingLeaves.length} pending leave request
+                {genPendingLeaves.length > 1 ? "s" : ""} in this period
+              </p>
+              <ul className="space-y-0.5 text-amber-700 dark:text-amber-400">
+                {genPendingLeaves.map((l, i) => (
+                  <li key={i}>
+                    • {l.name} — {l.from} → {l.to}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-amber-600 dark:text-amber-500">
+                Approve or reject these leaves before generating so the schedule reflects their
+                availability correctly.
+              </p>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGenLeaveChecked(true);
+                    setGenPendingLeaves([]);
+                    void handleGenerate();
+                  }}
+                  className="h-7 px-3 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium"
+                >
+                  Continue anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGenOpen(false);
+                    setGenPendingLeaves([]);
+                    setGenLeaveChecked(false);
+                  }}
+                  className="h-7 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                >
+                  Review leaves first
+                </button>
+              </div>
+            </div>
+          )}
 
           <DialogFooter>
             <DialogClose asChild>

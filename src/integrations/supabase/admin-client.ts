@@ -57,3 +57,17 @@ export async function adminDeleteUser(userId: string): Promise<void> {
   const { error } = await admin.auth.admin.deleteUser(userId);
   if (error) throw new Error(error.message);
 }
+
+/** Ban a user so they cannot log in. Sets ban_duration to a far-future value. */
+export async function adminBanUser(userId: string): Promise<void> {
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.updateUserById(userId, { ban_duration: "876000h" });
+  if (error) throw new Error(error.message);
+}
+
+/** Remove a user's ban so they can log in again. */
+export async function adminUnbanUser(userId: string): Promise<void> {
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.updateUserById(userId, { ban_duration: "none" });
+  if (error) throw new Error(error.message);
+}
