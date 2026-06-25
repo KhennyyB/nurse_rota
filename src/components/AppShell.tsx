@@ -19,6 +19,8 @@ import {
   LogIn,
   Timer,
   LayoutGrid,
+  Loader2,
+  ShieldAlert,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -57,8 +59,18 @@ export async function appBeforeLoad() {
 
 export function AppShell() {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const { user, fullName, roles, activeRole, needsRoleSelection, selectRole, signOut, loading } =
-    useAuth();
+  const {
+    user,
+    fullName,
+    roles,
+    activeRole,
+    needsRoleSelection,
+    mustChangePassword,
+    clearMustChangePassword,
+    selectRole,
+    signOut,
+    loading,
+  } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [menuPermissions, setMenuPermissions] = useState(loadMenuPermissions);
@@ -144,6 +156,16 @@ export function AppShell() {
     );
   }
 
+  if (mustChangePassword) {
+    return (
+      <ForcePasswordChangeScreen
+        fullName={fullName}
+        onChanged={clearMustChangePassword}
+        signOut={signOut}
+      />
+    );
+  }
+
   const visibleNav = nav.filter((n) => {
     // Admin always sees every page — menu permissions apply to non-admin roles only.
     if (activeRole === "admin") return true;
@@ -207,6 +229,120 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+    </div>
+  );
+}
+
+function ForcePasswordChangeScreen({
+  fullName,
+  onChanged,
+  signOut,
+}: {
+  fullName: string | null;
+  onChanged: () => void;
+  signOut: () => Promise<void>;
+}) {
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirm) {
+      toast.error("Passwords do not match");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error: authError } = await supabase.auth.updateUser({ password: newPassword });
+      if (authError) throw new Error(authError.message);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from("profiles").update({ must_change_password: false }).eq("id", user.id);
+      }
+      toast.success("Password updated successfully");
+      onChanged();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to update password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const cls = "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <div className="min-h-screen bg-background text-foreground grid place-items-center px-4">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-soft space-y-5"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-12 w-12 rounded-lg bg-amber-100 text-amber-600 grid place-items-center shrink-0">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <div>
+            <p className="font-semibold leading-tight">Password change required</p>
+            <p className="text-sm text-muted-foreground">
+              {fullName ? `Welcome, ${fullName}.` : "Welcome."} Please set a new password to
+              continue.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-sm font-medium" htmlFor="new-pw">
+              New password
+            </label>
+            <input
+              id="new-pw"
+              type="password"
+              required
+              minLength={8}
+              placeholder="Min. 8 characters"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className={cls + " mt-1"}
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium" htmlFor="confirm-pw">
+              Confirm password
+            </label>
+            <input
+              id="confirm-pw"
+              type="password"
+              required
+              placeholder="Repeat new password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              className={cls + " mt-1"}
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={busy || !newPassword || !confirm}
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+          Set new password
+        </button>
+        <button
+          type="button"
+          onClick={signOut}
+          className="h-9 w-full rounded-md border bg-background text-sm font-medium hover:bg-muted"
+        >
+          Sign out
+        </button>
+      </form>
     </div>
   );
 }

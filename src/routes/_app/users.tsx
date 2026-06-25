@@ -2,9 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { adminCreateUser, adminDeleteUser } from "@/integrations/supabase/admin-client";
+import { adminCreateUser, adminDeleteUser, adminListUsers, adminBanUser, adminUnbanUser } from "@/integrations/supabase/admin-client";
 import { useState } from "react";
-import { Users, Search, Plus, Trash2, Shield, UserCog, Loader2, X } from "lucide-react";
+import { Users, Search, Plus, Trash2, Shield, UserCog, Loader2, X, Clock, AlertTriangle, UserX, UserCheck, CheckCircle2 } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
@@ -35,6 +35,9 @@ type UserRow = {
   email: string | null;
   full_name: string | null;
   roles: AppRole[];
+  is_active: boolean;
+  must_change_password: boolean;
+  last_sign_in_at: string | null;
 };
 
 function UsersPage() {
@@ -47,19 +50,27 @@ function UsersPage() {
     queryKey: ["user-profiles"],
     enabled: isAdmin,
     queryFn: async () => {
-      const [{ data: profs, error: e1 }, { data: rls, error: e2 }] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name").order("full_name"),
+      const [{ data: profs, error: e1 }, { data: rls, error: e2 }, authUsers] = await Promise.all([
+        supabase.from("profiles").select("id, email, full_name, is_active, must_change_password").order("full_name"),
         supabase.from("user_roles").select("user_id, role"),
+        adminListUsers().catch(() => [] as { id: string; last_sign_in_at: string | null }[]),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
-      const map = new Map<string, AppRole[]>();
+      const roleMap = new Map<string, AppRole[]>();
       (rls ?? []).forEach((r) => {
-        const arr = map.get(r.user_id) ?? [];
+        const arr = roleMap.get(r.user_id) ?? [];
         arr.push(r.role as AppRole);
-        map.set(r.user_id, arr);
+        roleMap.set(r.user_id, arr);
       });
-      return (profs ?? []).map((p) => ({ ...p, roles: map.get(p.id) ?? [] })) as UserRow[];
+      const signInMap = new Map(authUsers.map((u) => [u.id, u.last_sign_in_at]));
+      return (profs ?? []).map((p) => ({
+        ...p,
+        is_active: (p as { is_active?: boolean }).is_active ?? true,
+        must_change_password: (p as { must_change_password?: boolean }).must_change_password ?? false,
+        roles: roleMap.get(p.id) ?? [],
+        last_sign_in_at: signInMap.get(p.id) ?? null,
+      })) as UserRow[];
     },
   });
 
@@ -79,6 +90,32 @@ function UsersPage() {
     if (error) return toast.error(error.message);
     toast.success(`Revoked: ${ROLE_LABELS[role]}`);
     qc.invalidateQueries({ queryKey: ["user-profiles"] });
+  }
+
+  async function deactivateUser(user: UserRow) {
+    if (!confirm(`Deactivate "${user.full_name ?? user.email}"? They will not be able to log in until reactivated.`))
+      return;
+    try {
+      await adminBanUser(user.id);
+      await supabase.from("profiles").update({ is_active: false }).eq("id", user.id);
+      toast.success("Login deactivated");
+      void qc.invalidateQueries({ queryKey: ["user-profiles"] });
+      void qc.invalidateQueries({ queryKey: ["profile-names"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to deactivate user");
+    }
+  }
+
+  async function reactivateUser(user: UserRow) {
+    try {
+      await adminUnbanUser(user.id);
+      await supabase.from("profiles").update({ is_active: true }).eq("id", user.id);
+      toast.success("Login reactivated");
+      void qc.invalidateQueries({ queryKey: ["user-profiles"] });
+      void qc.invalidateQueries({ queryKey: ["profile-names"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to reactivate user");
+    }
   }
 
   async function deleteUser(user: UserRow) {
@@ -164,6 +201,8 @@ function UsersPage() {
                   onAdd={addRole}
                   onRemove={removeRole}
                   onDelete={deleteUser}
+                  onDeactivate={deactivateUser}
+                  onReactivate={reactivateUser}
                 />
               ))}
             </div>
@@ -224,6 +263,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
           id: userId,
           full_name: form.fullName || form.email,
           email: form.email,
+          must_change_password: true,
           updated_at: new Date().toISOString(),
         }),
       ]);
@@ -340,16 +380,33 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
   );
 }
 
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "Never";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 2) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 function UserRow({
   user,
   onAdd,
   onRemove,
   onDelete,
+  onDeactivate,
+  onReactivate,
 }: {
   user: UserRow;
   onAdd: (id: string, role: AppRole) => void;
   onRemove: (id: string, role: AppRole) => void;
   onDelete: (user: UserRow) => void;
+  onDeactivate: (user: UserRow) => void;
+  onReactivate: (user: UserRow) => void;
 }) {
   const [adding, setAdding] = useState<AppRole | "">("");
   const available = ALL_ROLES.filter((r) => !user.roles.includes(r));
@@ -363,13 +420,30 @@ function UserRow({
   return (
     <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
       {/* Avatar + name */}
-      <div className="flex items-center gap-3 min-w-0 sm:w-60 shrink-0">
+      <div className="flex items-center gap-3 min-w-0 sm:w-64 shrink-0">
         <div className="h-9 w-9 rounded-full bg-primary/10 text-primary grid place-items-center shrink-0 font-semibold text-sm">
           {initials || <Users className="h-4 w-4" />}
         </div>
         <div className="min-w-0">
-          <p className="text-sm font-medium truncate">{user.full_name ?? "Unnamed"}</p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className="text-sm font-medium truncate">{user.full_name ?? "Unnamed"}</p>
+            {user.must_change_password && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] bg-amber-100 text-amber-700 border border-amber-200 rounded-full px-1.5 py-0.5 font-medium whitespace-nowrap"
+                title="User must change password on next login"
+              >
+                <AlertTriangle className="h-2.5 w-2.5" />
+                Needs PW change
+              </span>
+            )}
+          </div>
           <p className="text-[11px] text-muted-foreground truncate">{user.email}</p>
+          <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5">
+            <Clock className="h-2.5 w-2.5 shrink-0" />
+            <span title={user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : "Never signed in"}>
+              {formatRelativeTime(user.last_sign_in_at)}
+            </span>
+          </p>
         </div>
       </div>
 
@@ -427,6 +501,45 @@ function UserRow({
           </button>
         </div>
       )}
+
+      {/* Active status + deactivate/reactivate */}
+      <div className="flex items-center gap-1 shrink-0">
+        {user.is_active ? (
+          <>
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-success font-medium"
+              title="Login active"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" /> Active
+            </span>
+            <button
+              type="button"
+              onClick={() => onDeactivate(user)}
+              title="Deactivate login"
+              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 shrink-0 transition-colors"
+            >
+              <UserX className="h-3.5 w-3.5" />
+            </button>
+          </>
+        ) : (
+          <>
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium"
+              title="Login deactivated"
+            >
+              <UserX className="h-3.5 w-3.5" /> Inactive
+            </span>
+            <button
+              type="button"
+              onClick={() => onReactivate(user)}
+              title="Reactivate login"
+              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-success/40 hover:bg-success/10 text-muted-foreground hover:text-success shrink-0 transition-colors"
+            >
+              <UserCheck className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Delete user */}
       <button

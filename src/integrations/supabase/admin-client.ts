@@ -71,3 +71,16 @@ export async function adminUnbanUser(userId: string): Promise<void> {
   const { error } = await admin.auth.admin.updateUserById(userId, { ban_duration: "none" });
   if (error) throw new Error(error.message);
 }
+
+/** Fetch all auth users — used to read last_sign_in_at for the Users page. */
+export async function adminListUsers(): Promise<
+  { id: string; last_sign_in_at: string | null }[]
+> {
+  const admin = createAdminClient();
+  const { data, error } = await admin.auth.admin.listUsers({ perPage: 1000 });
+  if (error) throw new Error(error.message);
+  return (data?.users ?? []).map((u) => ({
+    id: u.id,
+    last_sign_in_at: u.last_sign_in_at ?? null,
+  }));
+}

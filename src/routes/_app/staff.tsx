@@ -139,6 +139,7 @@ function StaffPage() {
         .eq("id", userId);
       if (error) throw new Error(error.message);
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
+      void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       toast.success("Login deactivated");
     } catch (e) {
       toast.error((e as Error).message);
@@ -154,6 +155,7 @@ function StaffPage() {
         .eq("id", userId);
       if (error) throw new Error(error.message);
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
+      void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       toast.success("Login reactivated");
     } catch (e) {
       toast.error((e as Error).message);
@@ -1243,6 +1245,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
           id: userId,
           full_name: nurse.name,
           email,
+          must_change_password: true,
           updated_at: new Date().toISOString(),
         }),
         // Persist the email back to the nurses record if it changed.

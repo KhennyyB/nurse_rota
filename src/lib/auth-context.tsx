@@ -28,6 +28,8 @@ interface AuthCtx {
   nurseId: string | null;
   loading: boolean;
   needsRoleSelection: boolean;
+  mustChangePassword: boolean;
+  clearMustChangePassword: () => void;
   selectRole: (role: AppRole) => void;
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: AppRole[]) => boolean;
@@ -61,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [fullName, setFullName] = useState<string | null>(null);
   const [nurseFacility, setNurseFacility] = useState<string | null>(null);
   const [nurseId, setNurseId] = useState<string | null>(null);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -77,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setFullName(null);
         setNurseFacility(null);
         setNurseId(null);
+        setMustChangePassword(false);
       }
     });
 
@@ -92,12 +96,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function loadProfile(uid: string) {
     try {
-      const [{ data: roleData }, { data: profRows }] = await Promise.all([
+      const [{ data: roleData }, { data: profRows }, { data: profDetail }] = await Promise.all([
         supabase.rpc("get_my_roles"),
         supabase.rpc("get_my_profile"),
+        supabase.from("profiles").select("must_change_password").eq("id", uid).maybeSingle(),
       ]);
       const name = (profRows as { full_name: string | null }[] | null)?.[0]?.full_name ?? null;
       const loadedRoles = ((roleData as string[]) ?? []).map((r) => r as AppRole);
+      setMustChangePassword((profDetail as { must_change_password?: boolean } | null)?.must_change_password ?? false);
 
       setRoles(loadedRoles);
       setFullName(name);
@@ -144,6 +150,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setActiveRole(role);
   }
 
+  function clearMustChangePassword() {
+    setMustChangePassword(false);
+  }
+
   const ar = activeRole;
   const hasRole = (r: AppRole) => ar === r;
   const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
@@ -159,6 +169,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     nurseId,
     loading,
     needsRoleSelection: roles.length > 1 && activeRole === null,
+    mustChangePassword,
+    clearMustChangePassword,
     selectRole,
     hasRole,
     hasAnyRole,
