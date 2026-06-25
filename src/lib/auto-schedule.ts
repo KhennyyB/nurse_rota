@@ -389,11 +389,10 @@ function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode
 /**
  * Schedule a group of nurses strictly following `cycle`, writing into `out`.
  *
- * Block assignment is hours-aware: the 4 staggered block positions deliver
- * different total hours in any given 28-day window (due to 28 not being a
- * multiple of 16). Nurses with higher target_hours are assigned to block
- * positions that deliver more hours this period. For equal target_hours, the
- * assignment rotates each period so no nurse is permanently in a light block.
+ * Each nurse is permanently assigned to one of the numBlocks stagger slots
+ * based on their stable ID rank (tiebreaker after target_hours). The slot
+ * never changes between periods, guaranteeing that the nurse's cycle position
+ * at the start of period P+1 is exactly one day after where it ended in P.
  */
 function scheduleGroup(
   group: NurseInput[],
@@ -411,42 +410,24 @@ function scheduleGroup(
   const len = cycle.length;
   const numBlocks = Math.floor(len / 4);
 
-  // Compute hours delivered by each block position in this specific period.
-  const blockHours = Array.from({ length: numBlocks }, (_, b) => {
-    const offset = b * 4;
-    let h = 0;
-    for (let d = 0; d < days; d++) {
-      const s = cycle[(((phase + d + offset) % len) + len) % len];
-      if (s === "M") h += SHIFT_TIMES.M.hours;
-      else if (s === "N") h += SHIFT_TIMES.N.hours;
-    }
-    return h;
-  });
-
-  // Blocks ranked highest-hours first; ties broken by block index.
-  const rankedBlocks = Array.from({ length: numBlocks }, (_, b) => b).sort(
-    (a, b) => blockHours[b] - blockHours[a] || a - b,
-  );
-
   // Stable output order (by ID).
   const byId = [...group].sort((a, b) => a.id.localeCompare(b.id));
   const idRank = new Map(byId.map((n, i) => [n.id, i]));
 
-  // Assignment order: higher target_hours → higher-hours block.
-  // Tiebreaker is the stable ID rank — never rotated between periods so that
-  // each nurse stays in the same cycle block across periods (continuity fix).
+  // Assignment order: higher target_hours → earlier slot (more staggered hours).
+  // Tiebreaker is stable ID rank — never changes between periods.
   const forAssignment = [...byId].sort((a, b) => {
     const tDiff = (b.target_hours ?? 0) - (a.target_hours ?? 0);
     if (tDiff !== 0) return tDiff;
     return (idRank.get(a.id) ?? 0) - (idRank.get(b.id) ?? 0);
   });
 
-  // Each nurse's sorted rank i maps to the standard stagger slot, then to a
-  // ranked block — preserving coverage spread while honouring hour targets.
+  // Slot maps directly to block — no period-dependent ranking so the block
+  // assignment is permanent and the cycle continues across periods.
   const nurseBlock = new Map<string, number>();
   for (let i = 0; i < N; i++) {
     const slot = Math.round((i * numBlocks) / N) % numBlocks;
-    nurseBlock.set(forAssignment[i].id, rankedBlocks[slot]);
+    nurseBlock.set(forAssignment[i].id, slot);
   }
 
   for (let d = 0; d < days; d++) {

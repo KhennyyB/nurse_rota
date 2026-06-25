@@ -659,29 +659,37 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       (await supabase.from("nurses").select("id, name").order("name")).data ?? [],
   });
 
-  const { data: rotaPublished = false } = useQuery({
-    queryKey: ["leave-rota-published"],
-    queryFn: async () => {
-      const today = new Date().toISOString().split("T")[0];
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("id")
-        .eq("status", "published")
-        .gte("shift_date", today)
-        .limit(1);
-      return (data?.length ?? 0) > 0;
-    },
-  });
-
-  const allowedTypes = rotaPublished
-    ? ["Sick", "Emergency"]
-    : ["Sick", "Annual", "Emergency", "Public Holiday"];
-
   const [type, setType] = useState("Annual");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const datesReady = !!from && !!to;
+
+  // Check if the selected date range overlaps a published rota.
+  // Only runs once both dates are filled in.
+  const { data: datesInPublishedRota = false, isFetching: checkingDates } = useQuery({
+    queryKey: ["leave-dates-published", from, to],
+    enabled: datesReady,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_assignments")
+        .select("id")
+        .eq("status", "published")
+        .gte("shift_date", from)
+        .lte("shift_date", to)
+        .limit(1);
+      return (data?.length ?? 0) > 0;
+    },
+  });
+
+  const allowedTypes = datesInPublishedRota
+    ? ["Sick", "Emergency"]
+    : ["Sick", "Annual", "Emergency", "Public Holiday"];
+
+  // Keep the selected type valid when the allowed list narrows.
+  const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -691,7 +699,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       nurse_id: matchedNurse?.id ?? null,
       nurse_name: fullName ?? "",
       requested_by: user?.id,
-      type: type as "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap",
+      type: effectiveType as "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap",
       from_date: from,
       to_date: to,
       reason: reason || null,
@@ -710,27 +718,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New leave request" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        {rotaPublished && (
-          <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
-            The rota is currently published. Only <strong>Sick</strong> and{" "}
-            <strong>Emergency</strong> leave can be requested at this time.
-          </div>
-        )}
-        <div>
-          <label htmlFor="leave-type" className="text-sm font-medium">
-            Type
-          </label>
-          <select
-            id="leave-type"
-            value={allowedTypes.includes(type) ? type : allowedTypes[0]}
-            onChange={(e) => setType(e.target.value)}
-            className={inputCls}
-          >
-            {allowedTypes.map((t) => (
-              <option key={t}>{t}</option>
-            ))}
-          </select>
-        </div>
+        {/* Dates first — the type options depend on whether these fall in a published rota */}
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label htmlFor="leave-from" className="text-sm font-medium">
@@ -741,7 +729,11 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               required
               type="date"
               value={from}
-              onChange={(e) => setFrom(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setFrom(v);
+                if (!to || to < v) setTo(v);
+              }}
               className={inputCls}
             />
           </div>
@@ -753,12 +745,41 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               id="leave-to"
               required
               type="date"
+              min={from}
               value={to}
               onChange={(e) => setTo(e.target.value)}
               className={inputCls}
             />
           </div>
         </div>
+
+        {datesReady && datesInPublishedRota && (
+          <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
+            These dates fall within a <strong>published schedule</strong>. Only{" "}
+            <strong>Sick</strong> and <strong>Emergency</strong> leave can be requested.
+          </div>
+        )}
+
+        <div>
+          <label htmlFor="leave-type" className="text-sm font-medium">
+            Type
+          </label>
+          <select
+            id="leave-type"
+            value={effectiveType}
+            onChange={(e) => setType(e.target.value)}
+            disabled={checkingDates}
+            className={inputCls}
+          >
+            {allowedTypes.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+          {checkingDates && (
+            <p className="text-xs text-muted-foreground mt-1">Checking schedule…</p>
+          )}
+        </div>
+
         <div>
           <label htmlFor="leave-reason" className="text-sm font-medium">
             Reason (optional)
@@ -780,7 +801,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={busy}
+            disabled={busy || checkingDates}
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2"
           >
