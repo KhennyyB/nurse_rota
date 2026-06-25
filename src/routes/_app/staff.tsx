@@ -48,11 +48,11 @@ const NURSE_ROLES = [
   "Nurse",
   "Matron",
   "Coverage Nurse",
-  "Intern Nurse",
+  "Nurse Intern",
   "Nurse Assistant",
 ] as const;
 
-// Coverage Nurses and Intern Nurses are scheduled independently — no ward is tagged.
+// Coverage Nurses and Nurse Interns are scheduled independently — no ward is tagged.
 function isNoWardRole(role: string) {
   return /^(head|coverage)\s*nurse$|^intern\s*nurse$|^nurse\s*intern$/i.test(role);
 }

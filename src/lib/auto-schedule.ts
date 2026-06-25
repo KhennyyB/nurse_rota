@@ -798,7 +798,7 @@ export function generateSchedule(opts: {
   scheduleCoverageNurses(headNurses, days, opts.startDate, leave, out, periodOffset);
   headNurses.forEach((n) => scheduled.add(n.id));
 
-  // 2. Intern Nurses — grouped by assigned ward so interns in the same ward share
+  // 2. Nurse Interns— grouped by assigned ward so interns in the same ward share
   //    an identical phase (equal M/N/OFF counts).  Phases are staggered across
   //    ward-groups so different wards don't all share the same off-days.
   //    Assignments are stored with ward = null (same as Coverage Nurses) so that
