@@ -98,6 +98,7 @@ export type Database = {
         Row: {
           certifications: string[];
           created_at: string;
+          email: string | null;
           facility: string | null;
           hours_this_month: number;
           id: string;
@@ -110,6 +111,7 @@ export type Database = {
         Insert: {
           certifications?: string[];
           created_at?: string;
+          email?: string | null;
           facility?: string | null;
           hours_this_month?: number;
           id?: string;
@@ -122,6 +124,7 @@ export type Database = {
         Update: {
           certifications?: string[];
           created_at?: string;
+          email?: string | null;
           facility?: string | null;
           hours_this_month?: number;
           id?: string;

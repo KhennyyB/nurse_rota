@@ -155,7 +155,7 @@ function RotaPage() {
     startDate: todayYmd(),
     facility: "",
     ward: "",
-    rotateInterns: false,
+    rotateInterns: true,
   });
   // Pending leave warning: null = not checked yet, [] = checked + clear, [...] = warning shown
   const [genPendingLeaves, setGenPendingLeaves] = useState<
@@ -468,23 +468,6 @@ function RotaPage() {
     }
   }, [scheduledWardNames, genForm.ward]);
 
-  const leaveConflicts = useMemo(() => {
-    return leave
-      .filter((l) => {
-        if (l.status !== "Approved" || !l.nurse_id) return false;
-        return days.some((dt) => {
-          const dateStr = ymd(dt);
-          if (l.from_date > dateStr || l.to_date < dateStr) return false;
-          const cell = cellMap.get(`${l.nurse_id}|${dateStr}`);
-          return cell !== undefined && cell.shift !== "LEAVE";
-        });
-      })
-      .map((l) => ({
-        ...l,
-        nurseName: nurses.find((n) => n.id === l.nurse_id)?.name ?? "Unknown",
-      }));
-  }, [leave, days, cellMap, nurses]);
-
   // Derive the dominant lock status for the FILTERED view only.
   // If the user has filtered to a specific ward, only that ward's assignments
   // determine the lock — so other wards (still in draft) remain editable.
@@ -502,7 +485,7 @@ function RotaPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    setGenForm({ startDate: ymd(startDate), facility: "", ward: "", rotateInterns: false });
+    setGenForm({ startDate: ymd(startDate), facility: "", ward: "", rotateInterns: true });
     setGenOpen(true);
   }
 
@@ -738,10 +721,9 @@ function RotaPage() {
           (v) =>
             `• ${v.ward} — ${v.shift === "M" ? "Morning" : "Night"} ${v.role}: need ${v.required}, have ${v.actual}`,
         );
-        toast.warning(
-          `Schedule saved with staffing shortfalls:\n${lines.join("\n")}`,
-          { duration: 8000 },
-        );
+        toast.warning(`Schedule saved with staffing shortfalls:\n${lines.join("\n")}`, {
+          duration: 8000,
+        });
         // Do NOT return — continue saving the draft
       }
 
@@ -1223,25 +1205,6 @@ function RotaPage() {
           </>
         )}
       </div>
-
-      {/* Leave conflict warning */}
-      {leaveConflicts.length > 0 && (
-        <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-950/30">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div>
-            <p className="font-semibold text-amber-900 dark:text-amber-200">
-              Rota needs regeneration
-            </p>
-            <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
-              Leave was approved after the schedule was generated for:{" "}
-              {leaveConflicts
-                .map((c) => `${c.nurseName} (${c.from_date} → ${c.to_date})`)
-                .join(", ")}
-              . Regenerate the rota to apply the changes.
-            </p>
-          </div>
-        </div>
-      )}
 
       {extraShifts.length > 0 && (
         <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-orange-300 bg-orange-50 px-4 py-3 text-sm dark:border-orange-700 dark:bg-orange-950/30">

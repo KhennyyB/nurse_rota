@@ -73,6 +73,7 @@ type Nurse = {
   role: string;
   facility: string | null;
   ward: string | null;
+  email: string | null;
   hours_this_month: number;
   target_hours: number;
 };
@@ -211,7 +212,7 @@ function StaffPage() {
   const filtered = nurses.filter((n) => {
     if (
       search &&
-      !`${n.name} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""}`
+      !`${n.name} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""} ${n.email ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase())
     )
@@ -402,6 +403,7 @@ function StaffPage() {
                     Facility
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
+                  <th className="text-left font-semibold px-4 py-3 hidden lg:table-cell">Email</th>
                   <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">
                     Hours
                   </th>
@@ -438,6 +440,11 @@ function StaffPage() {
                       ) : (
                         parseWards(n.ward).join(", ") || "—"
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                      <span className="truncate block max-w-[180px]" title={n.email ?? ""}>
+                        {n.email ?? <span className="text-xs italic opacity-50">—</span>}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
                       {(() => {
@@ -649,6 +656,7 @@ function AddNurseModal({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [role, setRole] = useState("Nurse");
   const [facility, setFacility] = useState("");
   const [nurseWards, setNurseWards] = useState<string[]>([]);
@@ -665,6 +673,7 @@ function AddNurseModal({
     setBusy(true);
     const { error } = await supabase.from("nurses").insert({
       name,
+      email: email || null,
       role,
       facility: facility || null,
       ward: noWard ? null : formatWards(nurseWards),
@@ -688,6 +697,16 @@ function AddNurseModal({
             placeholder="Enter full name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className={inputCls}
+          />
+        </Field>
+        <Field id="nurse-email" label="Email address" hint="Used for login credentials">
+          <input
+            id="nurse-email"
+            type="email"
+            placeholder="nurse@hospital.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className={inputCls}
           />
         </Field>
@@ -763,6 +782,7 @@ function EditNurseModal({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(nurse.name);
+  const [email, setEmail] = useState(nurse.email ?? "");
   const [role, setRole] = useState(nurse.role);
   const [facility, setFacility] = useState(nurse.facility ?? "");
   const [nurseWards, setNurseWards] = useState<string[]>(parseWards(nurse.ward));
@@ -781,6 +801,7 @@ function EditNurseModal({
       .from("nurses")
       .update({
         name,
+        email: email || null,
         role,
         facility: facility || null,
         ward: noWard ? null : formatWards(nurseWards),
@@ -805,6 +826,16 @@ function EditNurseModal({
             placeholder="Enter full name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className={inputCls}
+          />
+        </Field>
+        <Field id="edit-email" label="Email address" hint="Used for login credentials">
+          <input
+            id="edit-email"
+            type="email"
+            placeholder="nurse@hospital.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className={inputCls}
           />
         </Field>
@@ -873,7 +904,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
-  const [rows, setRows] = useState<{ name: string; role: string; ward: string }[]>([]);
+  const [rows, setRows] = useState<{ name: string; role: string; ward: string; email: string }[]>([]);
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -895,6 +926,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
             name: get("name", "full name", "nurse"),
             role: get("role", "position") || "Nurse",
             ward: get("ward", "department", "unit"),
+            email: get("email", "email address"),
           };
         })
         .filter((r) => r.name);
@@ -913,6 +945,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     const { error } = await supabase.from("nurses").insert(
       rows.map((r) => ({
         name: r.name,
+        email: r.email || null,
         role: r.role,
         facility,
         ward: r.ward || null,
@@ -948,7 +981,8 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         <p className="text-sm text-muted-foreground">
           Upload an <code className="text-foreground">.xlsx</code> or{" "}
           <code className="text-foreground">.csv</code> with headers: <strong>Name</strong>,{" "}
-          <strong>Role</strong>, <strong>Ward</strong>.
+          <strong>Role</strong>, <strong>Ward</strong>, <strong>Email</strong>{" "}
+          <span className="text-xs">(optional)</span>.
         </p>
         <input
           ref={fileRef}
@@ -985,6 +1019,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
                     <th className="text-left px-3 py-1.5">Name</th>
                     <th className="text-left px-3 py-1.5">Role</th>
                     <th className="text-left px-3 py-1.5">Ward</th>
+                    <th className="text-left px-3 py-1.5">Email</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -993,6 +1028,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
                       <td className="px-3 py-1.5">{r.name}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.role}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.ward || "—"}</td>
+                      <td className="px-3 py-1.5 text-muted-foreground">{r.email || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1163,14 +1199,31 @@ const LOGIN_ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: "admin", label: "System Administrator" },
 ];
 
+function generatePassword(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
 function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => void }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(nurse.email ?? "");
+  const [password, setPassword] = useState(() => generatePassword());
   const [role, setRole] = useState("nurse");
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  function copyPassword() {
+    void navigator.clipboard.writeText(password).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!email) {
+      toast.error("Email address is required");
+      return;
+    }
     if (password.length < 8) {
       toast.error("Password must be at least 8 characters");
       return;
@@ -1192,6 +1245,8 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
           email,
           updated_at: new Date().toISOString(),
         }),
+        // Persist the email back to the nurses record if it changed.
+        supabase.from("nurses").update({ email }).eq("id", nurse.id),
       ]);
 
       logAudit("Created login", `${nurse.name} (${email}) — role: ${role}`);
@@ -1210,8 +1265,8 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
   return (
     <Modal title={`Create login — ${nurse.name}`} onClose={onClose}>
       <p className="text-sm text-muted-foreground mb-4">
-        Creates a system account. The user will log in with the email and password below. Their
-        dashboard will be scoped to the <strong>{nurse.facility ?? "assigned"}</strong> facility.
+        Creates a system account. The user will log in with the credentials below. Their dashboard
+        will be scoped to the <strong>{nurse.facility ?? "assigned"}</strong> facility.
       </p>
       <form onSubmit={submit} className="space-y-4">
         <div>
@@ -1227,23 +1282,44 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
             placeholder="nurse@hospital.com"
             className={cls}
           />
+          {!nurse.email && (
+            <p className="mt-1 text-xs text-amber-600">
+              No email saved on this nurse's profile. Enter one above and it will be saved automatically.
+            </p>
+          )}
         </div>
         <div>
           <label htmlFor="login-password" className="text-sm font-medium">
-            Password <span className="text-destructive">*</span>
+            Password
           </label>
-          <input
-            id="login-password"
-            type="password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Min. 8 characters"
-            className={cls}
-          />
+          <div className="flex gap-2 mt-1">
+            <input
+              id="login-password"
+              type="text"
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="flex-1 h-10 px-3 rounded-md border bg-card text-sm font-mono outline-none focus:ring-2 focus:ring-ring"
+            />
+            <button
+              type="button"
+              onClick={copyPassword}
+              className="h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted whitespace-nowrap"
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPassword(generatePassword())}
+              className="h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted whitespace-nowrap"
+              title="Generate new password"
+            >
+              ↻
+            </button>
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Share these credentials securely with the user.
+            Auto-generated. Share these credentials securely with the nurse before clicking Create.
           </p>
         </div>
         <div>
@@ -1276,7 +1352,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
           </button>
           <button
             type="submit"
-            disabled={busy || !email || !password}
+            disabled={busy || !email}
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
