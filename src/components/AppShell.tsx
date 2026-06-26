@@ -145,20 +145,6 @@ export function AppShell() {
     if (!loading && !user) navigate({ to: "/login" });
   }, [user, loading, navigate]);
 
-  // Route-level access guard — redirect to dashboard if the user navigates directly
-  // to a page their role cannot see, even by typing the URL manually.
-  useEffect(() => {
-    if (loading || !activeRole) return;
-    const currentItem = nav.find(
-      (n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)),
-    );
-    if (!currentItem) return;
-    if (activeRole === "admin") return;
-    const effectiveRoles = getEffectiveRoles(currentItem.to, menuPermissions);
-    if (!effectiveRoles.includes(activeRole)) {
-      void navigate({ to: "/" });
-    }
-  }, [path, loading, activeRole, menuPermissions, navigate]);
 
   if (needsRoleSelection) {
     return (
@@ -187,6 +173,18 @@ export function AppShell() {
     const effectiveRoles = getEffectiveRoles(n.to, menuPermissions);
     return activeRole ? effectiveRoles.includes(activeRole) : roles.length === 0;
   });
+
+  // Synchronous permission check — computed before render so there is never a
+  // flash of the real page content before a redirect kicks in.
+  const currentNavItem = nav.find(
+    (n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)),
+  );
+  const isPathPermitted =
+    loading || // auth still resolving — don't block yet
+    !activeRole ||
+    !currentNavItem ||
+    activeRole === "admin" ||
+    getEffectiveRoles(currentNavItem.to, menuPermissions).includes(activeRole);
   const primaryRole = activeRole ?? roles[0];
   const initials = (fullName ?? user?.email ?? "?")
     .split(/[\s@]/)
@@ -241,7 +239,29 @@ export function AppShell() {
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-6">
-          <Outlet />
+          {isPathPermitted ? (
+            <Outlet />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full py-24 gap-5 text-center">
+              <div className="h-16 w-16 rounded-full bg-destructive/10 text-destructive grid place-items-center">
+                <ShieldAlert className="h-8 w-8" />
+              </div>
+              <div>
+                <p className="text-lg font-semibold">Access denied</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  You don&apos;t have permission to view this page.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void navigate({ to: "/" })}
+                className="inline-flex items-center gap-2 h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium"
+              >
+                <LayoutDashboard className="h-4 w-4" />
+                Back to Dashboard
+              </button>
+            </div>
+          )}
         </main>
       </div>
     </div>
