@@ -1050,25 +1050,22 @@ function RotaPage() {
           <div className="inline-flex rounded-md border bg-card">
             <button
               type="button"
-              onClick={() => setStartOffset((o) => o - 1)}
-              className="h-9 w-9 grid place-items-center hover:bg-muted"
-              title="Previous 28-day period"
+              onClick={() => setStartOffset(0)}
+              disabled={startOffset === 0}
+              className="h-9 w-9 grid place-items-center hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Current period"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
+            <span className="px-3 text-xs font-medium flex items-center select-none">
+              {startOffset === 0 ? "Current" : "Next"}
+            </span>
             <button
               type="button"
-              onClick={() => setStartOffset(0)}
-              className="px-3 text-xs font-medium hover:bg-muted"
-              title="Jump to active schedule"
-            >
-              Current
-            </button>
-            <button
-              type="button"
-              onClick={() => setStartOffset((o) => o + 1)}
-              className="h-9 w-9 grid place-items-center hover:bg-muted"
-              title="Next 28-day period"
+              onClick={() => setStartOffset(1)}
+              disabled={startOffset === 1}
+              className="h-9 w-9 grid place-items-center hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Next period"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
