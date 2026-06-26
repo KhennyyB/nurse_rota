@@ -863,13 +863,13 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
         )
     : [];
 
-  async function fetchShift(nurseId: string, setShift: (s: string) => void) {
-    if (!nurseId || !date) return;
+  async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
+    if (!nurseId || !forDate) { setShift(""); return; }
     const { data } = await supabase
       .from("shift_assignments")
       .select("shift")
       .eq("nurse_id", nurseId)
-      .eq("shift_date", date)
+      .eq("shift_date", forDate)
       .eq("status", "published")
       .maybeSingle();
     setShift(data?.shift ?? "");
@@ -991,9 +991,14 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             type="date"
             value={date}
             onChange={(e) => {
-              setDate(e.target.value);
+              const newDate = e.target.value;
+              setDate(newDate);
               setShiftA("");
               setShiftB("");
+              // Re-fetch shifts immediately with the new date so already-selected
+              // nurses don't stay blank until the user manually re-selects them.
+              if (nurseAId) void fetchShift(nurseAId, newDate, setShiftA);
+              if (nurseBId) void fetchShift(nurseBId, newDate, setShiftB);
             }}
             className={inputCls}
           />
@@ -1015,7 +1020,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               setShiftA("");
               setShiftB("");
               setCoverShift("");
-              fetchShift(e.target.value, setShiftA);
+              void fetchShift(e.target.value, date, setShiftA);
             }}
             className={inputCls}
           >
@@ -1100,7 +1105,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => {
               setNurseBId(e.target.value);
               setShiftB("");
-              fetchShift(e.target.value, setShiftB);
+              void fetchShift(e.target.value, date, setShiftB);
             }}
             className={inputCls}
           >
@@ -1169,7 +1174,12 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               !date ||
               !reason.trim() ||
               (switchType === "inter-ward" && !wardB) ||
-              (shiftA === "LEAVE" && !coverShift)
+              (shiftA === "LEAVE" && !coverShift) ||
+              // Block if no published shift was found for either nurse on this date.
+              // shiftA/shiftB = "" means the fetch returned nothing (not a real shift value).
+              // "LEAVE" is handled by the coverShift check above; "OFF", "M", "N" are valid.
+              (!!nurseAId && !!date && shiftA !== "LEAVE" && !shiftA) ||
+              (!!nurseBId && !!date && !shiftB)
             }
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"

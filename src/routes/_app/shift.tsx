@@ -138,6 +138,7 @@ function ShiftPage() {
         .select("id, shift, shift_date, ward, status")
         .eq("nurse_id", nurseId!)
         .eq("shift_date", today)
+        .eq("status", "published")
         .maybeSingle();
       return data as Assignment | null;
     },
@@ -225,6 +226,7 @@ function ShiftPage() {
         .select("shift_date")
         .eq("nurse_id", nurseId!)
         .gte("shift_date", lb)
+        .eq("status", "published")
         .order("shift_date", { ascending: true })
         .limit(1);
 
