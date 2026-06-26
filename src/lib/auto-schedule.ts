@@ -15,7 +15,7 @@
 //   Post-MWC+ : staggered default cycle resumes (same stable block as scheduleGroup)
 //   Default   : stable-block staggered cycle -- continuous across period boundaries
 //
-// Matrons are never auto-scheduled (Mon–Fri mornings tracked at shift-page level).
+// Matrons: Morning shift every Mon–Fri, OFF on weekends, ward = null (published with coverage nurses).
 
 export type ShiftCode = "M" | "N" | "OFF" | "LEAVE" | "MWC" | "NC";
 
@@ -824,8 +824,23 @@ export function generateSchedule(opts: {
   const allViolations: SafetyViolation[] = [];
   const allExtraShifts: ExtraShift[] = [];
 
-  // Matrons are not auto-scheduled; mark them up-front so step 4 skips them.
-  nurses.filter((n) => isMatron(n.role)).forEach((n) => scheduled.add(n.id));
+  // Matrons: Morning shift Mon–Fri only, no ward, published alongside coverage nurses.
+  const matrons = nurses.filter((n) => isMatron(n.role));
+  for (let d = 0; d < days; d++) {
+    const date = new Date(opts.startDate);
+    date.setDate(date.getDate() + d);
+    const dateStr = ymd(date);
+    const isWeekday = date.getDay() >= 1 && date.getDay() <= 5;
+    for (const matron of matrons) {
+      out.push({
+        nurse_id: matron.id,
+        ward: null,
+        shift_date: dateStr,
+        shift: inLeave(leave, matron.id, dateStr) ? "LEAVE" : isWeekday ? "M" : "OFF",
+      });
+    }
+  }
+  matrons.forEach((n) => scheduled.add(n.id));
 
   // 1. Coverage Nurses (global, not ward-bound)
   // Uses scheduleCoverageNurses: weekends → MWC, first weekday N → NC, rest stay N.

@@ -20,7 +20,7 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { isGlobalHead, isInternType } from "@/lib/auto-schedule";
+import { isGlobalHead, isInternType, isMatron } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -362,7 +362,7 @@ function ApprovalsPage() {
       );
       const facility = allNurses.find((n) => winNurseIds.has(n.id))?.facility ?? null;
       const globalIds = allNurses
-        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role)))
+        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)))
         .map((n) => n.id);
       for (let i = 0; i < globalIds.length; i += 200) {
         await supabase
@@ -380,7 +380,7 @@ function ApprovalsPage() {
       actor_id: user?.id,
       actor_name: user?.email ?? null,
       action: "Submitted rota for approval",
-      target: `${win.ward ?? "Coverage Nurses"} · ${win.startDate} → ${win.endDate}`,
+      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
     });
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -425,7 +425,7 @@ function ApprovalsPage() {
       );
       const facility = allNurses.find((n) => winNurseIds.has(n.id))?.facility ?? null;
       const globalIds = allNurses
-        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role)))
+        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)))
         .map((n) => n.id);
       for (let i = 0; i < globalIds.length; i += 200) {
         await supabase
@@ -446,7 +446,7 @@ function ApprovalsPage() {
         nextStatus === "published"
           ? "Rota published"
           : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
-      target: `${win.ward ?? "Coverage Nurses"} · ${win.startDate} → ${win.endDate}`,
+      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
     });
     if (nextStatus === "published") {
       const nextStart = scheduleEndDate(win.startDate);
@@ -482,7 +482,7 @@ function ApprovalsPage() {
       actor_id: user?.id,
       actor_name: user?.email ?? null,
       action: "Rota returned to draft",
-      target: `${win.ward ?? "Coverage Nurses"} · ${win.startDate} → ${win.endDate}`,
+      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
     });
     toast.success("Returned to draft");
     qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -510,7 +510,7 @@ function ApprovalsPage() {
       actor_id: user?.id,
       actor_name: user?.email ?? null,
       action: "Unpublished rota — returned to Draft",
-      target: `${win.ward ?? "Coverage Nurses"} · ${win.startDate} → ${win.endDate}`,
+      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
     });
     toast.success("Rota unpublished — schedule is unchanged and now editable");
     qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -523,7 +523,7 @@ function ApprovalsPage() {
     let scopedNurses: NurseRow[] = allNurses as NurseRow[];
     if (facility) scopedNurses = scopedNurses.filter((n) => n.facility === facility);
     if (scope === "__HEAD__") {
-      scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role) || isInternType(n.role));
+      scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role));
     } else if (scope) {
       scopedNurses = scopedNurses.filter(
         (n) => !isGlobalHead(n.role) && parseWards(n.ward)[0] === scope,
@@ -565,7 +565,7 @@ function ApprovalsPage() {
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
       const facilityLabel = facility ? ` · ${facility}` : "";
-      const scopeLabel = scope === "__HEAD__" ? " — Coverage Nurses" : scope ? ` — ${scope}` : "";
+      const scopeLabel = scope === "__HEAD__" ? " — Matron / Coverage Nurses / Nurse Intern" : scope ? ` — ${scope}` : "";
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${scopeLabel}`;
       const headers = [
         "Nurse",
@@ -635,7 +635,7 @@ function ApprovalsPage() {
         .join("");
       const pdfFacilityLabel = facility ? ` · ${facility}` : "";
       const pdfScopeLabel =
-        scope === "__HEAD__" ? " — Coverage Nurses" : scope ? ` — ${scope}` : "";
+        scope === "__HEAD__" ? " — Matron / Coverage Nurses / Nurse Intern" : scope ? ` — ${scope}` : "";
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
@@ -732,7 +732,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {/* Header */}
         <div className="px-4 py-3.5 border-b flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Coverage Nurses"}</p>
+            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Matron / Coverage Nurses / Nurse Intern"}</p>
             <p className="text-xs font-medium text-foreground/70 mt-0.5">
               {fmtDate(win.startDate)} — {fmtDate(scheduleEndDate(win.startDate))}
             </p>
