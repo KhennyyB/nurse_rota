@@ -1,4 +1,4 @@
-// Auto-scheduling engine for the 28-day rota.
+﻿// Auto-scheduling engine for the 28-day rota.
 //
 // Universal 16-day cycle for ALL roles (strict, no override): 4M → 4OFF → 4N → 4OFF
 //   Offsets are snapped to 4-day block boundaries so every nurse always starts
@@ -6,15 +6,14 @@
 //   enforceMinima reports violations but NEVER modifies assignments.
 //
 // Coverage nurses follow a bespoke per-period pattern:
-//   NC block  : 4 consecutive NC shifts, sequentially staggered across nurses,
-//               rotating lead nurse each period (continuous across periods)
+//   NC block  : 4 consecutive NC shifts, phase-aligned to the nurse's natural N block
+//               and rotating lead nurse each period
 //   Post-NC   : 4 forced OFF days immediately after the NC block
-//   Post-NC+  : resume NURSE_CYCLE from position 0 (4M → 4OFF → 4N …)
-//   Pre-NC    : NURSE_CYCLE from staggered 4-block phase (same as all other roles)
-//   MWC       : one nurse per weekend rotates Sat+Sun MWC, others OFF on weekends
-//   Fri/Mon/Tue/Wed : 4 forced OFFs for the MWC nurse (1 before + 3 after),
-//               giving the full OFF entitlement: OFF, MWC, MWC, OFF, OFF, OFF
-//   Post-MWC+ : resume NURSE_CYCLE from position 0 (4M → 4OFF → 4N …)
+//   Post-NC+  : staggered default cycle (NC alignment guarantees it resumes correctly)
+//   MWC       : one nurse per weekend rotates Sat+Sun MWC duty
+//   Fri/Mon/Tue/Wed : 4 forced OFFs for the MWC nurse (1 before + 3 after)
+//   Post-MWC+ : staggered default cycle resumes (same stable block as scheduleGroup)
+//   Default   : stable-block staggered cycle -- continuous across period boundaries
 //
 // Matrons are never auto-scheduled (Mon–Fri mornings tracked at shift-page level).
 
@@ -562,14 +561,27 @@ function scheduleCoverageNurses(
   if (N === 0) return;
 
   const CL = NURSE_CYCLE.length; // 16
+  const numBlocks = CL / 4;     // 4
   const periodsElapsed = Math.round(periodOffset / days);
   const seed = stableGroupOffset(group);
 
-  // Phase for nurse i: snapped to a 4-day block boundary (0, 4, 8, or 12).
-  // Mirrors the block calculation in computeShift so NC stays in sync with the cycle.
+  // Stable block assignment -- same pattern as scheduleGroup so coverage nurses'
+  // default cycle is continuous across period boundaries.
+  const idRank = new Map(group.map((n, i) => [n.id, i]));
+  const forAssignment = [...group].sort((a, b) => {
+    const tDiff = (b.target_hours ?? 0) - (a.target_hours ?? 0);
+    if (tDiff !== 0) return tDiff;
+    return (idRank.get(a.id) ?? 0) - (idRank.get(b.id) ?? 0);
+  });
+  const nurseBlock = new Map<string, number>();
+  for (let i = 0; i < N; i++) {
+    const slot = Math.round((i * numBlocks) / N) % numBlocks;
+    nurseBlock.set(forAssignment[i].id, slot);
+  }
+
+  // Phase offset (0, 4, 8, or 12) for nurse i -- uses the stable block assignment.
   function nursePhase(i: number): number {
-    const block = Math.round((i * (CL / 4)) / N) % (CL / 4);
-    return block * 4;
+    return (nurseBlock.get(group[i].id) ?? 0) * 4;
   }
 
   // First day d ∈ [0, CL) in this period where nurse i's N block begins.
@@ -759,7 +771,7 @@ function scheduleCoverageNurses(
         shift =
           mwcResumeAt !== undefined
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
-            : computeShift(i, periodOffset + d, N, NURSE_CYCLE);
+            : NURSE_CYCLE[(((periodOffset + d + (nurseBlock.get(group[i].id) ?? 0) * 4) % CL) + CL) % CL];
       }
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });

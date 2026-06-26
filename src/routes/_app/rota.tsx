@@ -175,7 +175,7 @@ function RotaPage() {
   // Search backwards 27 days for the earliest assignment — that is the window start.
   // If none found in that range, fall forward to the next upcoming window.
   const { data: scheduleWindowStart } = useQuery({
-    queryKey: ["schedule-window-start"],
+    queryKey: ["schedule-window-start", activeRole],
     queryFn: async () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -188,21 +188,25 @@ function RotaPage() {
       // Earliest assignment within the past 27 days = start of the active window.
       // Gaps between schedules (days with no assignments) ensure we don't bleed
       // into a previous finished window.
-      const { data: current } = await supabase
+      let currentQuery = supabase
         .from("shift_assignments")
         .select("shift_date")
         .gte("shift_date", lookbackStr)
         .order("shift_date", { ascending: true })
         .limit(1);
+      if (activeRole === "nurse") currentQuery = currentQuery.eq("status", "published");
+      const { data: current } = await currentQuery;
       if (current?.[0]?.shift_date) return current[0].shift_date as string;
 
       // No active window — snap forward to the next upcoming one
-      const { data: future } = await supabase
+      let futureQuery = supabase
         .from("shift_assignments")
         .select("shift_date")
         .gt("shift_date", todayStr)
         .order("shift_date", { ascending: true })
         .limit(1);
+      if (activeRole === "nurse") futureQuery = futureQuery.eq("status", "published");
+      const { data: future } = await futureQuery;
       return (future?.[0]?.shift_date as string) ?? todayStr;
     },
   });
@@ -264,7 +268,13 @@ function RotaPage() {
   // Batching by 30 IDs keeps each response well under 1000 rows (30 × 28 = 840).
   const nurseIds = useMemo(() => nurses.map((n) => n.id), [nurses]);
   const { data: assignments = [], isLoading } = useQuery({
-    queryKey: ["assignments", ymd(startDate), ymd(endDate), nurseIds.length],
+    queryKey: [
+      "assignments",
+      ymd(startDate),
+      ymd(endDate),
+      nurseIds.length,
+      activeRole === "nurse",
+    ],
     enabled: nurseIds.length > 0,
     queryFn: async () => {
       const BATCH = 30;
@@ -273,14 +283,16 @@ function RotaPage() {
         batches.push(nurseIds.slice(i, i + BATCH));
       }
       const results = await Promise.all(
-        batches.map((batch) =>
-          supabase
+        batches.map((batch) => {
+          let q = supabase
             .from("shift_assignments")
             .select("*")
             .gte("shift_date", ymd(startDate))
             .lte("shift_date", ymd(endDate))
-            .in("nurse_id", batch),
-        ),
+            .in("nurse_id", batch);
+          if (activeRole === "nurse") q = q.eq("status", "published");
+          return q;
+        }),
       );
       const all: Assignment[] = [];
       for (const { data, error } of results) {
@@ -1267,8 +1279,14 @@ function RotaPage() {
       ) : !hasSchedule ? (
         <EmptyState
           icon={<CalendarDays className="h-6 w-6" />}
-          title="No schedule for this period"
-          description="Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
+          title={
+            activeRole === "nurse" ? "Schedule not yet published" : "No schedule for this period"
+          }
+          description={
+            activeRole === "nurse"
+              ? "Your schedule for this period has not been published yet. Check back later."
+              : "Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
+          }
           action={
             isAdmin ? (
               <button

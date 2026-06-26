@@ -161,6 +161,7 @@ function NurseDashboard() {
         .select("shift, shift_date, ward, status")
         .eq("nurse_id", nurseId!)
         .eq("shift_date", today)
+        .eq("status", "published")
         .maybeSingle();
       return data as Assignment | null;
     },
@@ -178,6 +179,7 @@ function NurseDashboard() {
         .eq("nurse_id", nurseId!)
         .gte("shift_date", next7)
         .lte("shift_date", end7)
+        .eq("status", "published")
         .order("shift_date", { ascending: true });
       return (data ?? []) as Assignment[];
     },

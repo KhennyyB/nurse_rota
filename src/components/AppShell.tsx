@@ -145,6 +145,21 @@ export function AppShell() {
     if (!loading && !user) navigate({ to: "/login" });
   }, [user, loading, navigate]);
 
+  // Route-level access guard — redirect to dashboard if the user navigates directly
+  // to a page their role cannot see, even by typing the URL manually.
+  useEffect(() => {
+    if (loading || !activeRole) return;
+    const currentItem = nav.find(
+      (n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)),
+    );
+    if (!currentItem) return;
+    if (activeRole === "admin") return;
+    const effectiveRoles = getEffectiveRoles(currentItem.to, menuPermissions);
+    if (!effectiveRoles.includes(activeRole)) {
+      void navigate({ to: "/" });
+    }
+  }, [path, loading, activeRole, menuPermissions, navigate]);
+
   if (needsRoleSelection) {
     return (
       <RoleSelectionScreen
