@@ -864,7 +864,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     : [];
 
   async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
-    if (!nurseId || !forDate) { setShift(""); return; }
+    if (!nurseId || !forDate) {
+      setShift("");
+      return;
+    }
     const { data } = await supabase
       .from("shift_assignments")
       .select("shift")

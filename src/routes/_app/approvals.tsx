@@ -183,6 +183,7 @@ function ApprovalsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [exportFacility, setExportFacility] = useState<Record<string, string>>({});
+  const [showAllPeriods, setShowAllPeriods] = useState(false);
 
   // Non-admins are locked to their own facility.
   const lockedFacility = !isAdmin && nurseFacility ? nurseFacility : null;
@@ -303,9 +304,16 @@ function ApprovalsPage() {
 
   // For each ward, only the most recent period belongs in approvals.
   // Older fully-published periods are archived in Reports.
+  // A fully-published window whose last shift date is more than 14 days ago
+  // moves to archive-only — the approvals page shows only active/upcoming work.
   const currentPeriodWindows = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 14);
+    const cutoffYmd = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}-${String(cutoff.getDate()).padStart(2, "0")}`;
+
     const latestByWard = new Map<string, RotaWindow>();
     for (const win of facilityWindows) {
+      if (win.status === "published" && win.endDate < cutoffYmd) continue;
       const wardKey = win.ward ?? "__COVERAGE__";
       const existing = latestByWard.get(wardKey);
       if (!existing || win.startDate > existing.startDate) {
@@ -440,11 +448,22 @@ function ApprovalsPage() {
           : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
       target: `${win.ward ?? "Coverage Nurses"} · ${win.startDate} → ${win.endDate}`,
     });
-    toast.success(
-      nextStatus === "published" ? "Rota published!" : "Approved — moving to next step",
-    );
+    if (nextStatus === "published") {
+      const nextStart = scheduleEndDate(win.startDate);
+      const nextStartDt = new Date(nextStart + "T00:00:00");
+      nextStartDt.setDate(nextStartDt.getDate() + 1);
+      const deadlineDt = new Date(nextStartDt);
+      deadlineDt.setDate(deadlineDt.getDate() - 14);
+      toast.success(
+        `Rota published! Next rota (from ${fmtDate(nextStartDt.toISOString().slice(0, 10))}) must be approved by ${fmtDate(deadlineDt.toISOString().slice(0, 10))}.`,
+        { duration: 8000 },
+      );
+    } else {
+      toast.success("Approved — moving to next step");
+    }
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
+    qc.invalidateQueries({ queryKey: ["rota-reminder"] });
   }
 
   async function reject(win: RotaWindow) {
@@ -714,6 +733,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
         <div className="px-4 py-3.5 border-b flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="text-sm font-semibold leading-snug">{win.ward ?? "Coverage Nurses"}</p>
+            <p className="text-xs font-medium text-foreground/70 mt-0.5">
+              {fmtDate(win.startDate)} — {fmtDate(scheduleEndDate(win.startDate))}
+            </p>
             {win.ward === null && winFacilities.length > 0 && (
               <p className="text-xs text-muted-foreground mt-0.5">{winFacilities.join(" · ")}</p>
             )}
@@ -933,43 +955,62 @@ td.sm{text-align:left;color:#444;min-width:55px}
           {/* Periods for the selected facility */}
           {windowsByPeriod.length === 0 ? (
             <p className="py-12 text-center text-sm text-muted-foreground">
-              No active schedules for {effectiveFacility}. Previous published periods are in{" "}
+              No active schedules for {effectiveFacility}. Published rotas older than 14 days are
+              in{" "}
               <span className="font-medium text-foreground">Reports → Schedule Archive</span>.
+              Generate a new rota from the{" "}
+              <span className="font-medium text-foreground">Rota</span> page.
             </p>
           ) : (
             <div className="space-y-8">
-              {windowsByPeriod.map(([periodStart, periodWins]) => {
-                const periodEnd = scheduleEndDate(periodStart);
-                const coverageWins = periodWins.filter((w) => w.ward === null);
-                const wardWins = periodWins.filter((w) => w.ward !== null);
-                return (
-                  <div key={periodStart}>
-                    {/* Period header */}
-                    <div className="flex items-center gap-2 mb-4">
-                      <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <h2 className="text-sm font-semibold text-foreground">
-                        {fmtDate(periodStart)} — {fmtDate(periodEnd)}
-                      </h2>
-                      <span className="text-xs text-muted-foreground">
-                        · {periodWins.length} schedule{periodWins.length !== 1 ? "s" : ""}
-                      </span>
-                      <div className="flex-1 h-px bg-border ml-1" />
-                    </div>
+              {(showAllPeriods ? windowsByPeriod : windowsByPeriod.slice(0, 2)).map(
+                ([periodStart, periodWins]) => {
+                  const periodEnd = scheduleEndDate(periodStart);
+                  const coverageWins = periodWins.filter((w) => w.ward === null);
+                  const wardWins = periodWins.filter((w) => w.ward !== null);
+                  return (
+                    <div key={periodStart}>
+                      {/* Period header */}
+                      <div className="flex items-center gap-2 mb-4">
+                        <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <h2 className="text-sm font-semibold text-foreground">
+                          {fmtDate(periodStart)} — {fmtDate(periodEnd)}
+                        </h2>
+                        <span className="text-xs text-muted-foreground">
+                          · {periodWins.length} schedule{periodWins.length !== 1 ? "s" : ""}
+                        </span>
+                        <div className="flex-1 h-px bg-border ml-1" />
+                      </div>
 
-                    <div className="space-y-3">
-                      {/* Coverage Nurses — full width */}
-                      {coverageWins.map((win) => renderCard(win))}
+                      <div className="space-y-3">
+                        {/* Coverage Nurses — full width */}
+                        {coverageWins.map((win) => renderCard(win))}
 
-                      {/* Ward cards — 2-col grid */}
-                      {wardWins.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                          {wardWins.map((win) => renderCard(win))}
-                        </div>
-                      )}
+                        {/* Ward cards — 2-col grid */}
+                        {wardWins.length > 0 && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                            {wardWins.map((win) => renderCard(win))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                },
+              )}
+
+              {windowsByPeriod.length > 2 && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllPeriods((v) => !v)}
+                    className="text-xs text-muted-foreground hover:text-foreground underline"
+                  >
+                    {showAllPeriods
+                      ? "Show fewer periods"
+                      : `Show ${windowsByPeriod.length - 2} older period${windowsByPeriod.length - 2 !== 1 ? "s" : ""}`}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </>

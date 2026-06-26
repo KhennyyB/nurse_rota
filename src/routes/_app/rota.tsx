@@ -864,8 +864,9 @@ function RotaPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
-      // Refresh assignments and re-detect the schedule window so the rota view
-      // snaps to the generated period automatically.
+      // Refresh assignments, nurse ward assignments (intern rotation), and re-detect
+      // the schedule window so the rota view snaps to the generated period automatically.
+      qc.invalidateQueries({ queryKey: ["nurses"] });
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
       setStartOffset(0);

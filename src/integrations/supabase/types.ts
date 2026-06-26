@@ -136,6 +136,35 @@ export type Database = {
         };
         Relationships: [];
       };
+      notification_state: {
+        Row: {
+          is_read: boolean;
+          notif_key: string;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          is_read?: boolean;
+          notif_key: string;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          is_read?: boolean;
+          notif_key?: string;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "notification_state_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       portal_settings: {
         Row: {
           key: string;

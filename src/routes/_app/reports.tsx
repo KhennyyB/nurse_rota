@@ -102,6 +102,12 @@ function dateRange(start: string, end: string): string[] {
   return out;
 }
 
+function scheduleEndDate(startDate: string): string {
+  const d = new Date(startDate + "T00:00:00");
+  d.setDate(d.getDate() + 27);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // ── Archive grouping (mirrors approvals.tsx groupIntoWindows) ────────────────
 
 function groupArchiveWindows(rows: ArchiveAssignment[]): ArchiveWindow[] {
@@ -286,6 +292,28 @@ function ReportsPage() {
     }
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [archiveWindows]);
+
+  // Precompute roles per archive window key (startDate|ward)
+  const archiveWindowRoles = useMemo(() => {
+    const nurseRoleMap = new Map(nurses.map((n) => [n.id, n.role]));
+    const result = new Map<string, string[]>();
+    for (const win of archiveWindows) {
+      const key = `${win.startDate}|${win.ward ?? ""}`;
+      const nurseIds = new Set(
+        archiveAssignments
+          .filter(
+            (a) =>
+              a.shift_date >= win.startDate && a.shift_date <= win.endDate && a.ward === win.ward,
+          )
+          .map((a) => a.nurse_id),
+      );
+      const roles = [
+        ...new Set([...nurseIds].map((id) => nurseRoleMap.get(id)).filter(Boolean) as string[]),
+      ].sort();
+      result.set(key, roles);
+    }
+    return result;
+  }, [archiveWindows, archiveAssignments, nurses]);
 
   // ── Close Period ──────────────────────────────────────────────────────────
   async function closePeriod() {
@@ -1168,62 +1196,89 @@ td.sm{text-align:left;color:#444;min-width:55px}
             />
           ) : (
             <div className="space-y-8">
-              {archiveByPeriod.map(([periodStart, periodWins]) => (
-                <div key={periodStart}>
-                  {/* Period header */}
-                  <div className="flex items-center gap-2 mb-3">
-                    <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <h2 className="text-sm font-semibold">
-                      {fmtDate(periodStart)} — {fmtDate(periodWins[0].endDate)}
-                    </h2>
-                    <span className="text-xs text-muted-foreground">
-                      · {periodWins.length} ward{periodWins.length !== 1 ? "s" : ""}
-                    </span>
-                    <div className="flex-1 h-px bg-border ml-1" />
-                  </div>
+              {archiveByPeriod.map(([periodStart, periodWins]) => {
+                const periodEnd = scheduleEndDate(periodStart);
+                const wardNames = periodWins.filter((w) => w.ward !== null).map((w) => w.ward!);
+                const allPeriodRoles = [
+                  ...new Set(
+                    periodWins.flatMap(
+                      (w) => archiveWindowRoles.get(`${w.startDate}|${w.ward ?? ""}`) ?? [],
+                    ),
+                  ),
+                ].sort();
+                return (
+                  <div key={periodStart}>
+                    {/* Period header */}
+                    <div className="flex items-start gap-2 mb-3">
+                      <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <h2 className="text-sm font-semibold">
+                          {fmtDate(periodStart)} — {fmtDate(periodEnd)}
+                        </h2>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {wardNames.length > 0 && (
+                            <>
+                              {wardNames.join(", ")}
+                              {allPeriodRoles.length > 0 ? " · " : ""}
+                            </>
+                          )}
+                          {allPeriodRoles.join(", ")}
+                        </p>
+                      </div>
+                      <div className="flex-1 h-px bg-border ml-1 mt-2.5" />
+                    </div>
 
-                  {/* Ward cards */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                    {periodWins.map((win) => {
-                      const key = `${win.startDate}|${win.ward ?? ""}`;
-                      const isDownloading = archiveDownloading?.startsWith(key);
-                      return (
-                        <div
-                          key={key}
-                          className="bg-card border rounded-xl p-4 flex flex-col gap-3"
-                        >
-                          <div>
-                            <p className="text-sm font-semibold">{win.ward ?? "Coverage Nurses"}</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {win.nurseCount} nurses · {win.assignmentCount} assignments
-                            </p>
+                    {/* Ward cards */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                      {periodWins.map((win) => {
+                        const key = `${win.startDate}|${win.ward ?? ""}`;
+                        const isDownloading = archiveDownloading?.startsWith(key);
+                        const winRoles = archiveWindowRoles.get(key) ?? [];
+                        return (
+                          <div
+                            key={key}
+                            className="bg-card border rounded-xl p-4 flex flex-col gap-3"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold">
+                                {win.ward ?? "Coverage Nurses"}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {win.nurseCount} nurses · {win.assignmentCount} assignments
+                              </p>
+                              {winRoles.length > 0 && (
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {winRoles.join(", ")}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex gap-2 mt-auto">
+                              <button
+                                type="button"
+                                disabled={!!isDownloading}
+                                onClick={() => downloadScheduleExcel(win)}
+                                className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                              >
+                                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                                {archiveDownloading === key + "-xlsx" ? "…" : "Excel"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!!isDownloading}
+                                onClick={() => downloadSchedulePdf(win)}
+                                className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                              >
+                                <FileDown className="h-3.5 w-3.5 text-red-500" />
+                                {archiveDownloading === key + "-pdf" ? "…" : "PDF"}
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex gap-2 mt-auto">
-                            <button
-                              type="button"
-                              disabled={!!isDownloading}
-                              onClick={() => downloadScheduleExcel(win)}
-                              className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
-                            >
-                              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                              {archiveDownloading === key + "-xlsx" ? "…" : "Excel"}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={!!isDownloading}
-                              onClick={() => downloadSchedulePdf(win)}
-                              className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
-                            >
-                              <FileDown className="h-3.5 w-3.5 text-red-500" />
-                              {archiveDownloading === key + "-pdf" ? "…" : "PDF"}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

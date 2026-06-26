@@ -561,7 +561,7 @@ function scheduleCoverageNurses(
   if (N === 0) return;
 
   const CL = NURSE_CYCLE.length; // 16
-  const numBlocks = CL / 4;     // 4
+  const numBlocks = CL / 4; // 4
   const periodsElapsed = Math.round(periodOffset / days);
   const seed = stableGroupOffset(group);
 
@@ -626,6 +626,7 @@ function scheduleCoverageNurses(
   // mwcNurseResumeDays: nurseIdx → resume entries (day + cycle offset) per MWC block
   const mwcByDate = new Map<string, number>();
   const mwcForcedOff = new Map<string, Set<number>>();
+  const mwcForcedM = new Map<string, Set<number>>();
   // nurseIdx → [{resumeAt, cycleOffset}] for each MWC weekend this period.
   // cycleOffset 0 → resume M (non-M case); cycleOffset 8 → resume N (M-block case).
   const mwcNurseResumeDays = new Map<number, Array<{ resumeAt: number; cycleOffset: number }>>();
@@ -675,26 +676,31 @@ function scheduleCoverageNurses(
 
     // Which phase the nurse is in on Friday determines both whether a pre-MWC
     // rest day is needed and what phase follows after the post-MWC OFFs:
-    //   pos 0-3  (M block)   : MWC merges into M; 4 OFFs after; resume N (pos 8).
-    //   pos 4-7  (1st OFF)   : M already done; Fri OFF natural; 3 OFFs after; resume N.
-    //   pos 8-11 (N block)   : force Fri OFF for rest; 3 OFFs after; resume M (pos 0).
-    //   pos 12-15 (2nd OFF)  : N already done; Fri OFF natural; 3 OFFs after; resume M.
+    //   pos 0-3  (M block)       : MWC merges into M; 4 OFFs after; resume N (pos 8).
+    //   pos 4-5  (early 1st OFF) : Fri already OFF; 3 OFFs after; resume N.
+    //   pos 6-7  (deep 1st OFF)  : 3+ OFFs already precede; add M M Mon/Tue after MWC;
+    //                              4 OFFs after M M; resume N.
+    //                              pattern: OFF OFF OFF MWC MWC M M OFF OFF OFF OFF → N …
+    //   pos 8-11 (N block)       : force Fri OFF for rest; 3 OFFs after; resume M (pos 0).
+    //   pos 12-15 (2nd OFF)      : N already done; Fri already OFF; 3 OFFs after; resume M.
     const mBlockOnFriday = fridayCyclePos < 4;
+    const deepFirstOff = fridayCyclePos >= 6 && fridayCyclePos < 8;
     const cycleOffset = fridayCyclePos < 8 ? 8 : 0; // before N-phase done → N; else → M
-    const resumeAt = mBlockOnFriday ? d + 6 : d + 5;
+    const resumeAt = mBlockOnFriday ? d + 6 : deepFirstOff ? d + 8 : d + 5;
     if (!mwcNurseResumeDays.has(mwcNurse)) mwcNurseResumeDays.set(mwcNurse, []);
     mwcNurseResumeDays.get(mwcNurse)!.push({ resumeAt, cycleOffset });
 
-    // Forced OFFs around MWC:
-    //   M-block (pos 0-3) : no pre-MWC Fri OFF; 4 OFFs after → resume N (Fri d+6)
-    //                       pattern: [M…] MWC MWC OFF OFF OFF OFF → N N N N …
-    //   1st OFF (pos 4-7) : Fri already OFF; 3 OFFs after → resume N (Thu d+5)
-    //                       pattern: OFF MWC MWC OFF OFF OFF → N N N N …
-    //   N block (pos 8-11): force Fri OFF; 3 OFFs after → resume M (Thu d+5)
-    //   2nd OFF (pos 12-15): Fri already OFF; 3 OFFs after → resume M (Thu d+5)
+    // Forced OFFs (and forced M for deep-1st-OFF case) around MWC:
+    //   M-block (pos 0-3)       : no pre-MWC Fri OFF; 4 OFFs (Mon-Thu) after → N Fri
+    //   1st OFF early (pos 4-5) : Fri naturally OFF; 3 OFFs (Mon-Wed) after → N Thu
+    //   1st OFF deep (pos 6-7)  : Fri naturally OFF; M Mon/Tue; 4 OFFs (Wed-Sat) → N Sun
+    //   N block (pos 8-11)      : force Fri OFF; 3 OFFs (Mon-Wed) after → M Thu
+    //   2nd OFF (pos 12-15)     : Fri naturally OFF; 3 OFFs (Mon-Wed) after → M Thu
     const forcedOffDays = mBlockOnFriday
       ? [d + 2, d + 3, d + 4, d + 5]
-      : [d - 1, d + 2, d + 3, d + 4];
+      : deepFirstOff
+        ? [d + 4, d + 5, d + 6, d + 7]
+        : [d - 1, d + 2, d + 3, d + 4];
     for (const off of forcedOffDays) {
       if (off < 0 || off >= days) continue;
       const offDate = new Date(startDate);
@@ -702,6 +708,18 @@ function scheduleCoverageNurses(
       const offStr = ymd(offDate);
       if (!mwcForcedOff.has(offStr)) mwcForcedOff.set(offStr, new Set());
       mwcForcedOff.get(offStr)!.add(mwcNurse);
+    }
+
+    // Deep-1st-OFF: force M shifts on the two days immediately after MWC weekend.
+    if (deepFirstOff) {
+      for (const mDay of [d + 2, d + 3]) {
+        if (mDay < 0 || mDay >= days) continue;
+        const mDate = new Date(startDate);
+        mDate.setDate(mDate.getDate() + mDay);
+        const mStr = ymd(mDate);
+        if (!mwcForcedM.has(mStr)) mwcForcedM.set(mStr, new Set());
+        mwcForcedM.get(mStr)!.add(mwcNurse);
+      }
     }
   }
 
@@ -730,6 +748,9 @@ function scheduleCoverageNurses(
         shift = "NC";
       } else if (mwcByDate.get(dateStr) === i) {
         shift = "MWC";
+      } else if (mwcForcedM.get(dateStr)?.has(i)) {
+        // Forced M shifts Mon/Tue after MWC when nurse was deep in 1st OFF block (pos 6-7).
+        shift = "M";
       } else if (mwcForcedOff.get(dateStr)?.has(i)) {
         // Forced OFFs around MWC weekend (see pre-pass for exact days per case).
         shift = "OFF";
@@ -771,7 +792,9 @@ function scheduleCoverageNurses(
         shift =
           mwcResumeAt !== undefined
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
-            : NURSE_CYCLE[(((periodOffset + d + (nurseBlock.get(group[i].id) ?? 0) * 4) % CL) + CL) % CL];
+            : NURSE_CYCLE[
+                (((periodOffset + d + (nurseBlock.get(group[i].id) ?? 0) * 4) % CL) + CL) % CL
+              ];
       }
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
