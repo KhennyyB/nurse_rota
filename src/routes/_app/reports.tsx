@@ -178,20 +178,26 @@ function ReportsPage() {
 
   const { data: nurses = [] } = useQuery<Nurse[]>({
     queryKey: ["nurses"],
-    queryFn: async () => (await supabase.from("nurses").select("*")).data ?? [],
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () =>
+      (await supabase.from("nurses").select("id, name, role, facility, ward, target_hours, hours_this_month")).data ?? [],
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
-    queryFn: async () => (await supabase.from("wards").select("*").order("name")).data ?? [],
+    staleTime: 30 * 60 * 1000,
+    queryFn: async () => (await supabase.from("wards").select("id, name, facility").order("name")).data ?? [],
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
-    queryFn: async () => (await supabase.from("leave_requests").select("*")).data ?? [],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () =>
+      (await supabase.from("leave_requests").select("id, nurse_id, from_date, to_date, status, type, reason")).data ?? [],
   });
 
   // Current period shift logs (last 28 days)
   const { data: shiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["shift-logs-current"],
+    staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
@@ -208,6 +214,7 @@ function ReportsPage() {
   // All saved period summaries
   const { data: periodSummaries = [] } = useQuery<PeriodHours[]>({
     queryKey: ["period-hours-all"],
+    staleTime: 30 * 60 * 1000,
     queryFn: async () => {
       const { data } = await supabase
         .from("nurse_period_hours")
@@ -222,11 +229,16 @@ function ReportsPage() {
     ArchiveAssignment[]
   >({
     queryKey: ["archive-assignments"],
+    staleTime: 30 * 60 * 1000,
     queryFn: async () => {
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      const cutoff = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-${String(sixMonthsAgo.getDate()).padStart(2, "0")}`;
       const { data } = await supabase
         .from("shift_assignments")
         .select("nurse_id, shift_date, ward, shift")
         .eq("status", "published")
+        .gte("shift_date", cutoff)
         .order("shift_date", { ascending: false });
       return (data ?? []) as ArchiveAssignment[];
     },
@@ -234,17 +246,26 @@ function ReportsPage() {
   });
 
   // Build per-nurse hours for current period
-  const nurseHoursMap = new Map<string, number>();
-  const nurseShiftCountMap = new Map<string, number>();
-  for (const log of shiftLogs) {
-    if (log.hours_logged != null) {
-      nurseHoursMap.set(log.nurse_id, (nurseHoursMap.get(log.nurse_id) ?? 0) + log.hours_logged);
-      nurseShiftCountMap.set(log.nurse_id, (nurseShiftCountMap.get(log.nurse_id) ?? 0) + 1);
+  const { nurseHoursMap, nurseShiftCountMap } = useMemo(() => {
+    const hours = new Map<string, number>();
+    const shifts = new Map<string, number>();
+    for (const log of shiftLogs) {
+      if (log.hours_logged != null) {
+        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
+        shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
+      }
     }
-  }
+    return { nurseHoursMap: hours, nurseShiftCountMap: shifts };
+  }, [shiftLogs]);
 
-  const totalLoggedHours = [...nurseHoursMap.values()].reduce((s, h) => s + h, 0);
-  const activeNurses = nurses.filter((n) => nurseHoursMap.has(n.id));
+  const totalLoggedHours = useMemo(
+    () => [...nurseHoursMap.values()].reduce((s, h) => s + h, 0),
+    [nurseHoursMap],
+  );
+  const activeNurses = useMemo(
+    () => nurses.filter((n) => nurseHoursMap.has(n.id)),
+    [nurses, nurseHoursMap],
+  );
 
   // Staff directory: nurses by selected facility, grouped by ward
   const facilityNurses = useMemo(

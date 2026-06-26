@@ -176,6 +176,7 @@ function RotaPage() {
   // If none found in that range, fall forward to the next upcoming window.
   const { data: scheduleWindowStart } = useQuery({
     queryKey: ["schedule-window-start", activeRole],
+    staleTime: 10 * 60 * 1000,
     queryFn: async () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -251,15 +252,29 @@ function RotaPage() {
   // ── Data queries ─────────────────────────────────────────────────────────
   const { data: nurses = [] } = useQuery<NurseInput[]>({
     queryKey: ["nurses"],
-    queryFn: async () =>
-      ((await supabase.from("nurses").select("*").order("name")).data ?? []) as NurseInput[],
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("nurses")
+        .select("id, name, role, ward, facility, target_hours")
+        .order("name");
+      return (data ?? []) as NurseInput[];
+    },
   });
 
   const { data: leave = [] } = useQuery<LeaveInput[]>({
     queryKey: ["leave"],
-    queryFn: async () =>
-      ((await supabase.from("leave_requests").select("nurse_id,from_date,to_date,status")).data ??
-        []) as LeaveInput[],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      const cutoff = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-${String(sixMonthsAgo.getDate()).padStart(2, "0")}`;
+      const { data } = await supabase
+        .from("leave_requests")
+        .select("nurse_id,from_date,to_date,status")
+        .gte("to_date", cutoff);
+      return (data ?? []) as LeaveInput[];
+    },
   });
 
   // Fetch assignments filtered to only the loaded nurses and date range.
@@ -276,6 +291,7 @@ function RotaPage() {
       activeRole === "nurse",
     ],
     enabled: nurseIds.length > 0,
+    staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const BATCH = 30;
       const batches: string[][] = [];
@@ -286,7 +302,7 @@ function RotaPage() {
         batches.map((batch) => {
           let q = supabase
             .from("shift_assignments")
-            .select("*")
+            .select("id, nurse_id, ward, shift_date, shift, status")
             .gte("shift_date", ymd(startDate))
             .lte("shift_date", ymd(endDate))
             .in("nurse_id", batch);

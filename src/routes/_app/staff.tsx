@@ -20,7 +20,11 @@ import {
   UserCheck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { adminCreateUser, adminBanUser, adminUnbanUser } from "@/integrations/supabase/admin-client";
+import {
+  adminCreateUser,
+  adminBanUser,
+  adminUnbanUser,
+} from "@/integrations/supabase/admin-client";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -93,10 +97,11 @@ function StaffPage() {
 
   const { data: nurses = [], isLoading } = useQuery({
     queryKey: ["nurses"],
+    staleTime: 10 * 60 * 1000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("nurses")
-        .select("*")
+        .select("id, name, role, facility, ward, email, hours_this_month, target_hours")
         .order("name", { ascending: true });
       if (error) throw error;
       return data as Nurse[];
@@ -106,6 +111,7 @@ function StaffPage() {
   const { data: profileRows = [] } = useQuery({
     queryKey: ["profile-names"],
     enabled: canCreateLogin,
+    staleTime: 10 * 60 * 1000,
     queryFn: async () => {
       // Try with is_active; fall back to basic select if the migration hasn't run yet.
       const { data, error } = await supabase.from("profiles").select("id, full_name, is_active");
@@ -164,6 +170,7 @@ function StaffPage() {
 
   const { data: wards = [] } = useQuery<{ name: string; facility: string | null }[]>({
     queryKey: ["wards"],
+    staleTime: 30 * 60 * 1000,
     queryFn: async () =>
       (await supabase.from("wards").select("name, facility").order("name")).data ?? [],
   });
@@ -178,6 +185,7 @@ function StaffPage() {
 
   const { data: shiftLogs = [] } = useQuery<{ nurse_id: string; hours_logged: number | null }[]>({
     queryKey: ["staff-shift-logs-current", periodStart],
+    staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_logs")
@@ -211,19 +219,23 @@ function StaffPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const filtered = nurses.filter((n) => {
-    if (
-      search &&
-      !`${n.name} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""} ${n.email ?? ""}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    )
-      return false;
-    if (filterRole && n.role !== filterRole) return false;
-    if (filterFacility && n.facility !== filterFacility) return false;
-    if (filterWard && !parseWards(n.ward).includes(filterWard)) return false;
-    return true;
-  });
+  const filtered = useMemo(
+    () =>
+      nurses.filter((n) => {
+        if (
+          search &&
+          !`${n.name} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""} ${n.email ?? ""}`
+            .toLowerCase()
+            .includes(search.toLowerCase())
+        )
+          return false;
+        if (filterRole && n.role !== filterRole) return false;
+        if (filterFacility && n.facility !== filterFacility) return false;
+        if (filterWard && !parseWards(n.ward).includes(filterWard)) return false;
+        return true;
+      }),
+    [nurses, search, filterRole, filterFacility, filterWard],
+  );
 
   const activeFilters = [filterRole, filterFacility, filterWard].filter(Boolean).length;
   const clearFilters = () => {
@@ -234,8 +246,12 @@ function StaffPage() {
   };
 
   // Ward names shown in the filter bar: scoped to the selected facility when one is active.
-  const wardNames = (filterFacility ? wards.filter((w) => w.facility === filterFacility) : wards).map(
-    (w) => w.name,
+  const wardNames = useMemo(
+    () =>
+      (filterFacility ? wards.filter((w) => w.facility === filterFacility) : wards).map(
+        (w) => w.name,
+      ),
+    [wards, filterFacility],
   );
 
   return (
@@ -406,9 +422,7 @@ function StaffPage() {
                   </th>
                   <th className="text-left font-semibold px-4 py-3">Ward</th>
                   <th className="text-left font-semibold px-4 py-3 hidden lg:table-cell">Email</th>
-                  <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">
-                    Hours
-                  </th>
+                  <th className="text-right font-semibold px-4 py-3 hidden sm:table-cell">Hours</th>
                   {canCreateLogin && <th className="text-center font-semibold px-4 py-3">Login</th>}
                   {canManageStaff && (
                     <th className="px-4 py-3">
@@ -451,7 +465,8 @@ function StaffPage() {
                     <td className="px-4 py-3 text-right tabular-nums hidden sm:table-cell">
                       {(() => {
                         const hrs = hoursMap.get(n.id) ?? 0;
-                        const display = hrs < 1 && hrs > 0 ? `${Math.round(hrs * 60)}m` : `${Math.round(hrs)}h`;
+                        const display =
+                          hrs < 1 && hrs > 0 ? `${Math.round(hrs * 60)}m` : `${Math.round(hrs)}h`;
                         return (
                           <span title={`${hrs.toFixed(2)}h worked / ${n.target_hours}h target`}>
                             {display}
@@ -551,11 +566,7 @@ function StaffPage() {
 
       {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wards} />}
       {editingNurse && (
-        <EditNurseModal
-          nurse={editingNurse}
-          wards={wards}
-          onClose={() => setEditingNurse(null)}
-        />
+        <EditNurseModal nurse={editingNurse} wards={wards} onClose={() => setEditingNurse(null)} />
       )}
       {showSetHours && (
         <SetTargetHoursModal
@@ -750,7 +761,11 @@ function AddNurseModal({
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
           </p>
         ) : (
-          <WardMultiField selectedWards={nurseWards} allWards={availableWards} onChange={setNurseWards} />
+          <WardMultiField
+            selectedWards={nurseWards}
+            allWards={availableWards}
+            onChange={setNurseWards}
+          />
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button
@@ -879,7 +894,11 @@ function EditNurseModal({
             Ward assignment is not applicable for {role}s — their schedule is managed independently.
           </p>
         ) : (
-          <WardMultiField selectedWards={nurseWards} allWards={availableWards} onChange={setNurseWards} />
+          <WardMultiField
+            selectedWards={nurseWards}
+            allWards={availableWards}
+            onChange={setNurseWards}
+          />
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button
@@ -906,7 +925,9 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
-  const [rows, setRows] = useState<{ name: string; role: string; ward: string; email: string }[]>([]);
+  const [rows, setRows] = useState<{ name: string; role: string; ward: string; email: string }[]>(
+    [],
+  );
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -1287,7 +1308,8 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
           />
           {!nurse.email && (
             <p className="mt-1 text-xs text-amber-600">
-              No email saved on this nurse's profile. Enter one above and it will be saved automatically.
+              No email saved on this nurse's profile. Enter one above and it will be saved
+              automatically.
             </p>
           )}
         </div>

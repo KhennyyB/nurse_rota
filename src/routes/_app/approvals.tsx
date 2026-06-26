@@ -197,6 +197,7 @@ function ApprovalsPage() {
 
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses-approvals"],
+    staleTime: 10 * 60 * 1000,
     queryFn: async () =>
       ((await supabase.from("nurses").select("id, name, role, ward, facility").order("name"))
         .data ?? []) as {
@@ -210,9 +211,10 @@ function ApprovalsPage() {
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["approvals"],
+    staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const sixAgo = new Date();
-      sixAgo.setMonth(sixAgo.getMonth() - 6);
+      sixAgo.setMonth(sixAgo.getMonth() - 3);
       const threeAhead = new Date();
       threeAhead.setMonth(threeAhead.getMonth() + 3);
       const ymd = (d: Date) => {
