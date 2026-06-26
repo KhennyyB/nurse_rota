@@ -1305,7 +1305,7 @@ function RotaPage() {
             isAdmin ? (
               <button
                 type="button"
-                onClick={() => setGenOpen(true)}
+                onClick={openGenDialog}
                 className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
               >
                 <CalendarDays className="h-4 w-4" /> Auto-generate
