@@ -24,6 +24,7 @@ import {
   nextInternWard,
   isInternType,
   isGlobalHead,
+  isMatron,
   SHIFT_TIMES,
   type ShiftCode,
   type NurseInput,
@@ -562,10 +563,15 @@ function RotaPage() {
     const isWardRun = !!genForm.ward;
     const facilityNurses = nurses.filter((n) => n.facility === genForm.facility);
     const facilityHeads = facilityNurses.filter((n) => isGlobalHead(n.role));
+    const facilityMatrons = facilityNurses.filter((n) => isMatron(n.role));
     const facilityInterns = facilityNurses.filter((n) => isInternType(n.role));
 
-    // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards)
-    let wardNurses = facilityNurses.filter((n) => !isGlobalHead(n.role) && !isInternType(n.role));
+    // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards).
+    // Matrons are excluded here and handled separately (like coverage nurses) since they
+    // are facility-wide (ward = null) and would otherwise be filtered out of ward runs.
+    let wardNurses = facilityNurses.filter(
+      (n) => !isGlobalHead(n.role) && !isMatron(n.role) && !isInternType(n.role),
+    );
     if (isWardRun) {
       wardNurses = wardNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
     }
@@ -600,14 +606,27 @@ function RotaPage() {
       }
     }
 
-    // For ward runs: include head nurses and interns only if they have no
+    // For ward runs: include matrons, head nurses, and interns only if they have no
     // existing assignments for this period (first ward run of the 28-day cycle).
     // Subsequent ward runs keep their schedules untouched.
+    let includeMatrons = !isWardRun;
     let includeHeads = !isWardRun;
     let includeInterns = !isWardRun;
 
     if (isWardRun) {
-      const [headsRes, internsRes] = await Promise.all([
+      const [matronsRes, headsRes, internsRes] = await Promise.all([
+        facilityMatrons.length > 0
+          ? supabase
+              .from("shift_assignments")
+              .select("id")
+              .in(
+                "nurse_id",
+                facilityMatrons.map((n) => n.id),
+              )
+              .gte("shift_date", ymd(genStart))
+              .lte("shift_date", ymd(genEnd))
+              .limit(1)
+          : Promise.resolve({ data: [] as { id: string }[] }),
         facilityHeads.length > 0
           ? supabase
               .from("shift_assignments")
@@ -633,6 +652,7 @@ function RotaPage() {
               .limit(1)
           : Promise.resolve({ data: [] as { id: string }[] }),
       ]);
+      includeMatrons = (matronsRes.data?.length ?? 0) === 0 && facilityMatrons.length > 0;
       includeHeads = (headsRes.data?.length ?? 0) === 0 && facilityHeads.length > 0;
       includeInterns = (internsRes.data?.length ?? 0) === 0 && facilityInterns.length > 0;
     }
@@ -679,14 +699,15 @@ function RotaPage() {
 
     const schedulingNurses = [
       ...wardNurses,
+      ...(includeMatrons ? facilityMatrons : []),
       ...(includeHeads ? facilityHeads : []),
       ...(includeInterns ? internsToSchedule : []),
     ];
 
     const statusNote =
-      isWardRun && !includeHeads && !includeInterns
+      isWardRun && !includeMatrons && !includeHeads && !includeInterns
         ? " (Matron / Coverage Nurses / Nurse Intern kept from previous run)"
-        : isWardRun && (includeHeads || includeInterns)
+        : isWardRun && (includeMatrons || includeHeads || includeInterns)
           ? " (incl. Matron / Coverage Nurses / Nurse Intern — first run)"
           : "";
 
