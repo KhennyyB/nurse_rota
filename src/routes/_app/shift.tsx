@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Clock,
   Lock,
+  MapPin,
   PlayCircle,
   StopCircle,
   Timer,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
+import { verifyLocationAndCaptureIp } from "@/lib/geo-fence";
 
 export const Route = createFileRoute("/_app/shift")({
   head: () => ({
@@ -112,6 +114,9 @@ function ShiftPage() {
   const today = todayYmd();
   const [now, setNow] = useState(new Date());
   const autoEndingRef = useRef(false);
+  const pendingGeoRef = useRef<{ lat: number; lng: number; ip: string | null } | null>(null);
+  const [geoChecking, setGeoChecking] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
   const [lateDialog, setLateDialog] = useState<{
     open: boolean;
     reason: string;
@@ -144,20 +149,21 @@ function ShiftPage() {
     },
   });
 
-  // Fetch the nurse's job role (e.g. "Matron") to detect matron nurses who log
-  // in as the regular "nurse" AppRole and have no auto-generated assignments.
-  const { data: nurseJobRole } = useQuery<string | null>({
-    queryKey: ["nurse-job-role", nurseId],
+  // Fetch the nurse's job role and facility for matron detection and geo-fencing.
+  const { data: nurseInfo } = useQuery<{ role: string | null; facility: string | null } | null>({
+    queryKey: ["nurse-info", nurseId],
     enabled: !!nurseId,
     queryFn: async () => {
       const { data } = await supabase
         .from("nurses")
-        .select("role")
+        .select("role, facility")
         .eq("id", nurseId!)
         .maybeSingle();
-      return data?.role ?? null;
+      return data ? { role: data.role ?? null, facility: data.facility ?? null } : null;
     },
   });
+  const nurseJobRole = nurseInfo?.role ?? null;
+  const nurseFacility = nurseInfo?.facility ?? null;
   const isMatronNurse = /^matron$/i.test(nurseJobRole ?? "");
 
   // Matrons have no auto-generated assignments. Synthesise a Mon–Fri morning shift
@@ -274,6 +280,8 @@ function ShiftPage() {
     const shiftType = assignment.shift as "M" | "N";
     const startedAt = new Date();
     const expectedEnd = calcExpectedEnd(shiftType, startedAt);
+    const geo = pendingGeoRef.current;
+    pendingGeoRef.current = null;
 
     // Find the period start
     const lookback = new Date();
@@ -300,6 +308,9 @@ function ShiftPage() {
       is_late: recordedLate,
       late_minutes: recordedLate ? lateMins : null,
       late_reason: lateReason?.trim() || null,
+      latitude: geo?.lat ?? null,
+      longitude: geo?.lng ?? null,
+      ip_address: geo?.ip ?? null,
     });
 
     if (error) return toast.error(error.message);
@@ -311,6 +322,24 @@ function ShiftPage() {
     );
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
     qc.invalidateQueries({ queryKey: ["my-period-logs"] });
+  }
+
+  async function handleStartClick() {
+    setGeoError(null);
+    setGeoChecking(true);
+    try {
+      const geo = await verifyLocationAndCaptureIp(nurseFacility);
+      pendingGeoRef.current = geo;
+      if (isLate) {
+        setLateDialog({ open: true, reason: "", capturedMinutes: minutesSinceStart });
+      } else {
+        void startShift();
+      }
+    } catch (err) {
+      setGeoError(err instanceof Error ? err.message : "Could not verify your location.");
+    } finally {
+      setGeoChecking(false);
+    }
   }
 
   async function endShift(log: ShiftLog, isAuto = false) {
@@ -524,7 +553,10 @@ function ShiftPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setLateDialog({ open: false, reason: "", capturedMinutes: 0 })}
+                    onClick={() => {
+                      pendingGeoRef.current = null;
+                      setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
+                    }}
                     className="px-4 h-9 rounded-md border text-sm font-medium hover:bg-muted transition"
                   >
                     Cancel
@@ -547,33 +579,32 @@ function ShiftPage() {
               {!shiftLog && !lateDialog.open && (
                 <button
                   type="button"
-                  disabled={!canStartShift || !isSchedulePublished}
-                  onClick={() => {
-                    if (isLate) {
-                      setLateDialog({
-                        open: true,
-                        reason: "",
-                        capturedMinutes: minutesSinceStart,
-                      });
-                    } else {
-                      void startShift();
-                    }
-                  }}
+                  disabled={!canStartShift || !isSchedulePublished || geoChecking}
+                  onClick={() => void handleStartClick()}
                   className={cn(
                     "flex-1 h-11 rounded-lg text-sm font-semibold inline-flex items-center justify-center gap-2 transition",
-                    canStartShift && isSchedulePublished
+                    canStartShift && isSchedulePublished && !geoChecking
                       ? "bg-emerald-600 text-white hover:bg-emerald-700"
                       : "bg-muted text-muted-foreground cursor-not-allowed",
                   )}
                 >
-                  <PlayCircle className="h-5 w-5" />
-                  {!isSchedulePublished
-                    ? "Schedule Not Published"
-                    : canStartShift
-                      ? "Start Shift"
-                      : shiftStartTime
-                        ? `Shift begins at ${fmtHHMM(shiftStartTime)}`
-                        : "Start Shift"}
+                  {geoChecking ? (
+                    <>
+                      <MapPin className="h-5 w-5 animate-pulse" />
+                      Checking location…
+                    </>
+                  ) : (
+                    <>
+                      <PlayCircle className="h-5 w-5" />
+                      {!isSchedulePublished
+                        ? "Schedule Not Published"
+                        : canStartShift
+                          ? "Start Shift"
+                          : shiftStartTime
+                            ? `Shift begins at ${fmtHHMM(shiftStartTime)}`
+                            : "Start Shift"}
+                    </>
+                  )}
                 </button>
               )}
               {isActive && (
@@ -586,6 +617,17 @@ function ShiftPage() {
                 </button>
               )}
             </div>
+
+            {/* Geo-fence error */}
+            {geoError && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-sm">
+                <MapPin className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-semibold text-destructive">Location check failed</p>
+                  <p className="text-destructive/80 text-xs mt-0.5">{geoError}</p>
+                </div>
+              </div>
+            )}
 
             {/* Help text when button is time-locked */}
             {!shiftLog && isSchedulePublished && !canStartShift && shiftStartTime && (

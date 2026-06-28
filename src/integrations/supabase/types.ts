@@ -269,6 +269,9 @@ export type Database = {
           is_late: boolean;
           late_minutes: number | null;
           late_reason: string | null;
+          latitude: number | null;
+          longitude: number | null;
+          ip_address: string | null;
         };
         Insert: {
           id?: string;
@@ -284,6 +287,9 @@ export type Database = {
           is_late?: boolean;
           late_minutes?: number | null;
           late_reason?: string | null;
+          latitude?: number | null;
+          longitude?: number | null;
+          ip_address?: string | null;
         };
         Update: {
           id?: string;
@@ -299,6 +305,9 @@ export type Database = {
           is_late?: boolean;
           late_minutes?: number | null;
           late_reason?: string | null;
+          latitude?: number | null;
+          longitude?: number | null;
+          ip_address?: string | null;
         };
         Relationships: [
           {

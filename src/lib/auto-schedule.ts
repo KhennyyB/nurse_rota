@@ -677,30 +677,30 @@ function scheduleCoverageNurses(
     // Which phase the nurse is in on Friday determines both whether a pre-MWC
     // rest day is needed and what phase follows after the post-MWC OFFs:
     //   pos 0-3  (M block)       : MWC merges into M; 4 OFFs after; resume N (pos 8).
-    //   pos 4-5  (early 1st OFF) : Fri already OFF; 3 OFFs after; resume N.
+    //   pos 4-5  (early 1st OFF) : Fri naturally OFF; 2 OFFs (Mon-Tue) after → N Wed.
     //   pos 6-7  (deep 1st OFF)  : 3+ OFFs already precede; add M M Mon/Tue after MWC;
     //                              4 OFFs after M M; resume N.
     //                              pattern: OFF OFF OFF MWC MWC M M OFF OFF OFF OFF → N …
-    //   pos 8-11 (N block)       : force Fri OFF for rest; 3 OFFs after; resume M (pos 0).
-    //   pos 12-15 (2nd OFF)      : N already done; Fri already OFF; 3 OFFs after; resume M.
+    //   pos 8-11 (N block)       : force Fri OFF for rest; 2 OFFs (Mon-Tue) after → M Wed.
+    //   pos 12-15 (2nd OFF)      : N already done; Fri naturally OFF; 2 OFFs (Mon-Tue) → M Wed.
     const mBlockOnFriday = fridayCyclePos < 4;
     const deepFirstOff = fridayCyclePos >= 6 && fridayCyclePos < 8;
     const cycleOffset = fridayCyclePos < 8 ? 8 : 0; // before N-phase done → N; else → M
-    const resumeAt = mBlockOnFriday ? d + 6 : deepFirstOff ? d + 8 : d + 5;
+    const resumeAt = mBlockOnFriday ? d + 6 : deepFirstOff ? d + 8 : d + 4;
     if (!mwcNurseResumeDays.has(mwcNurse)) mwcNurseResumeDays.set(mwcNurse, []);
     mwcNurseResumeDays.get(mwcNurse)!.push({ resumeAt, cycleOffset });
 
     // Forced OFFs (and forced M for deep-1st-OFF case) around MWC:
     //   M-block (pos 0-3)       : no pre-MWC Fri OFF; 4 OFFs (Mon-Thu) after → N Fri
-    //   1st OFF early (pos 4-5) : Fri naturally OFF; 3 OFFs (Mon-Wed) after → N Thu
+    //   1st OFF early (pos 4-5) : Fri naturally OFF; 2 OFFs (Mon-Tue) after → N Wed
     //   1st OFF deep (pos 6-7)  : Fri naturally OFF; M Mon/Tue; 4 OFFs (Wed-Sat) → N Sun
-    //   N block (pos 8-11)      : force Fri OFF; 3 OFFs (Mon-Wed) after → M Thu
-    //   2nd OFF (pos 12-15)     : Fri naturally OFF; 3 OFFs (Mon-Wed) after → M Thu
+    //   N block (pos 8-11)      : force Fri OFF; 2 OFFs (Mon-Tue) after → M Wed
+    //   2nd OFF (pos 12-15)     : Fri naturally OFF; 2 OFFs (Mon-Tue) after → M Wed
     const forcedOffDays = mBlockOnFriday
       ? [d + 2, d + 3, d + 4, d + 5]
       : deepFirstOff
         ? [d + 4, d + 5, d + 6, d + 7]
-        : [d - 1, d + 2, d + 3, d + 4];
+        : [d - 1, d + 2, d + 3];
     for (const off of forcedOffDays) {
       if (off < 0 || off >= days) continue;
       const offDate = new Date(startDate);
@@ -765,7 +765,9 @@ function scheduleCoverageNurses(
         const ncMwcEntries = mwcNurseResumeDays.get(i);
         if (ncMwcEntries) {
           for (const entry of ncMwcEntries) {
-            if (d >= entry.resumeAt) {
+            // Only apply MWC resume if it falls after the NC+rest period; a MWC that
+            // happened before or during NC was overridden by the NC block and is stale.
+            if (d >= entry.resumeAt && entry.resumeAt > ncStart! + 8) {
               mwcResumeAt = entry.resumeAt;
               mwcCycleOffset = entry.cycleOffset;
             }
