@@ -19,6 +19,7 @@ import {
   List,
   Building2,
   CalendarRange,
+  Stethoscope,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Progress } from "@/components/ui/progress";
@@ -62,6 +63,17 @@ type ShiftLog = {
   is_late: boolean | null;
   late_minutes: number | null;
   late_reason: string | null;
+  is_locum: boolean;
+};
+type LocumFilledRequest = {
+  id: string;
+  shift_date: string;
+  shift: string;
+  facility: string;
+  ward: string;
+  accepted_by_nurse_id: string | null;
+  accepted_by_nurse_name: string | null;
+  accepted_at: string | null;
 };
 type PeriodHours = {
   nurse_id: string;
@@ -203,7 +215,7 @@ function ReportsPage() {
   const { canPrintStaff, canPrintSchedule } = useAuth();
 
   const [tab, setTab] = useState<
-    "overview" | "hours" | "periods" | "leave" | "staff-dir" | "schedules"
+    "overview" | "hours" | "locum" | "periods" | "leave" | "staff-dir" | "schedules"
   >("overview");
   const [closingPeriod, setClosingPeriod] = useState(false);
   const [dirFacility, setDirFacility] = useState<string>(FACILITIES[0]);
@@ -237,7 +249,7 @@ function ReportsPage() {
       ).data ?? [],
   });
 
-  // Current period shift logs (last 28 days)
+  // Current period regular shift logs (last 28 days) — locum excluded
   const { data: shiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["shift-logs-current"],
     staleTime: 2 * 60 * 1000,
@@ -248,9 +260,40 @@ function ReportsPage() {
       const { data } = await supabase
         .from("shift_logs")
         .select("*")
+        .eq("is_locum", false)
         .gte("shift_date", lb)
         .order("shift_date", { ascending: false });
       return (data ?? []) as ShiftLog[];
+    },
+  });
+
+  // Locum shift logs — separate from regular hours
+  const { data: locumShiftLogs = [] } = useQuery<ShiftLog[]>({
+    queryKey: ["locum-shift-logs-report"],
+    staleTime: 2 * 60 * 1000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_logs")
+        .select("*")
+        .eq("is_locum", true)
+        .order("shift_date", { ascending: false });
+      return (data ?? []) as ShiftLog[];
+    },
+  });
+
+  // Filled locum requests — provides ward / facility context for each locum log
+  const { data: locumFilledRequests = [] } = useQuery<LocumFilledRequest[]>({
+    queryKey: ["locum-filled-report"],
+    staleTime: 2 * 60 * 1000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("locum_requests")
+        .select(
+          "id, shift_date, shift, facility, ward, accepted_by_nurse_id, accepted_by_nurse_name, accepted_at",
+        )
+        .eq("status", "filled")
+        .order("shift_date", { ascending: false });
+      return (data ?? []) as LocumFilledRequest[];
     },
   });
 
@@ -288,7 +331,7 @@ function ReportsPage() {
     enabled: tab === "schedules",
   });
 
-  // Build per-nurse hours for current period
+  // Build per-nurse hours for current period (regular shifts only — locum excluded)
   const { nurseHoursMap, nurseShiftCountMap } = useMemo(() => {
     const hours = new Map<string, number>();
     const shifts = new Map<string, number>();
@@ -308,6 +351,30 @@ function ReportsPage() {
   const activeNurses = useMemo(
     () => nurses.filter((n) => nurseHoursMap.has(n.id)),
     [nurses, nurseHoursMap],
+  );
+
+  // Locum derived data
+  const locumLogMap = useMemo(() => {
+    const m = new Map<string, ShiftLog>();
+    for (const log of locumShiftLogs) m.set(`${log.nurse_id}|${log.shift_date}`, log);
+    return m;
+  }, [locumShiftLogs]);
+
+  const { locumHoursMap, locumShiftCountMap } = useMemo(() => {
+    const hours = new Map<string, number>();
+    const shifts = new Map<string, number>();
+    for (const log of locumShiftLogs) {
+      if (log.hours_logged != null) {
+        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
+      }
+      shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
+    }
+    return { locumHoursMap: hours, locumShiftCountMap: shifts };
+  }, [locumShiftLogs]);
+
+  const totalLocumHours = useMemo(
+    () => [...locumHoursMap.values()].reduce((s, h) => s + h, 0),
+    [locumHoursMap],
   );
 
   // Staff directory: nurses by selected facility, grouped by ward
@@ -508,6 +575,46 @@ function ReportsPage() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Period Archive");
     XLSX.writeFile(wb, `period-archive-${todayYmd()}.xlsx`);
+    toast.success("Exported");
+  }
+
+  function exportLocumReport() {
+    if (locumFilledRequests.length === 0) return toast.error("No locum shifts to export");
+    const rows = locumFilledRequests.map((r) => {
+      const log = r.accepted_by_nurse_id
+        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+        : undefined;
+      return {
+        Date: r.shift_date,
+        Nurse: r.accepted_by_nurse_name ?? "Unknown",
+        Ward: r.ward,
+        Facility: r.facility,
+        "Shift Type": r.shift === "M" ? "Morning" : "Night",
+        "Started At": log?.started_at ? new Date(log.started_at).toLocaleString("en-GB") : "",
+        "Ended At": log?.ended_at
+          ? new Date(log.ended_at).toLocaleString("en-GB")
+          : log
+            ? "In Progress"
+            : "Not Started",
+        "Hours Logged": log?.hours_logged != null ? Number(log.hours_logged).toFixed(2) : "",
+        "Accepted At": r.accepted_at ? new Date(r.accepted_at).toLocaleString("en-GB") : "",
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [
+      { wch: 12 },
+      { wch: 26 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 12 },
+      { wch: 20 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Locum Hours");
+    XLSX.writeFile(wb, `locum-hours-${todayYmd()}.xlsx`);
     toast.success("Exported");
   }
 
@@ -758,6 +865,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
         <button type="button" className={tabCls("hours")} onClick={() => setTab("hours")}>
           Shift Hours
         </button>
+        <button type="button" className={tabCls("locum")} onClick={() => setTab("locum")}>
+          Locum Hours
+        </button>
         <button type="button" className={tabCls("periods")} onClick={() => setTab("periods")}>
           Period Archive
         </button>
@@ -782,8 +892,12 @@ td.sm{text-align:left;color:#444;min-width:55px}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
             <Stat icon={Users} label="Staff" value={nurses.length} />
             <Stat icon={BarChart3} label="Wards" value={wards.length} />
-            <Stat icon={Clock} label="Hours (period)" value={totalLoggedHours.toFixed(1)} />
-            <Stat icon={BarChart3} label="Leave Requests" value={leave.length} />
+            <Stat icon={Clock} label="Shift Hours (period)" value={totalLoggedHours.toFixed(1)} />
+            <Stat
+              icon={Stethoscope}
+              label="Locum Hours (all time)"
+              value={totalLocumHours.toFixed(1)}
+            />
           </div>
           <div className="bg-card border rounded-xl p-5 shadow-soft">
             <h2 className="font-semibold mb-4">Staff Hours — Current Period</h2>
@@ -923,6 +1037,142 @@ td.sm{text-align:left;color:#444;min-width:55px}
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Locum Hours ──────────────────────────────────────────────────── */}
+      {tab === "locum" && (
+        <div className="space-y-4">
+          {/* Stats */}
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+            <Stat icon={Stethoscope} label="Shifts Filled" value={locumFilledRequests.length} />
+            <Stat icon={Clock} label="Total Hours" value={totalLocumHours.toFixed(1)} />
+            <Stat
+              icon={Users}
+              label="Nurses Used"
+              value={new Set(locumFilledRequests.map((r) => r.accepted_by_nurse_id)).size}
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={exportLocumReport}
+              className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+            >
+              <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export Locum Report
+            </button>
+          </div>
+
+          {locumFilledRequests.length === 0 ? (
+            <EmptyState
+              icon={<Stethoscope className="h-6 w-6" />}
+              title="No locum shifts filled yet"
+              description="Hours appear here once nurses accept locum invitations and complete their shifts."
+            />
+          ) : (
+            <>
+              {/* Per-nurse summary */}
+              <div className="bg-card border rounded-xl p-5 shadow-soft">
+                <h2 className="font-semibold mb-4">Per-Nurse Summary</h2>
+                <div className="space-y-2">
+                  {[...locumHoursMap.entries()]
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([nurseId, hrs]) => {
+                      const name =
+                        locumFilledRequests.find((r) => r.accepted_by_nurse_id === nurseId)
+                          ?.accepted_by_nurse_name ?? "Unknown";
+                      const shifts = locumShiftCountMap.get(nurseId) ?? 0;
+                      return (
+                        <div key={nurseId} className="flex items-center gap-3 text-sm">
+                          <div className="w-40 truncate font-medium">{name}</div>
+                          <div className="flex-1 h-5 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-violet-400"
+                              style={{
+                                width: `${Math.min(Math.round((hrs / Math.max(totalLocumHours, 1)) * 100), 100)}%`,
+                              }}
+                            />
+                          </div>
+                          <div className="w-36 text-right tabular-nums text-muted-foreground text-xs">
+                            {hrs.toFixed(1)} h · {shifts} shift{shifts !== 1 ? "s" : ""}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* Detailed log */}
+              <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-semibold">Date</th>
+                      <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+                      <th className="text-left px-4 py-3 font-semibold">Ward</th>
+                      <th className="text-left px-4 py-3 font-semibold">Facility</th>
+                      <th className="text-left px-4 py-3 font-semibold">Shift</th>
+                      <th className="text-left px-4 py-3 font-semibold">Started</th>
+                      <th className="text-left px-4 py-3 font-semibold">Ended</th>
+                      <th className="text-right px-4 py-3 font-semibold">Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {locumFilledRequests.map((r) => {
+                      const log = r.accepted_by_nurse_id
+                        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+                        : undefined;
+                      return (
+                        <tr key={r.id} className="border-t hover:bg-muted/30">
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {fmtDate(r.shift_date)}
+                          </td>
+                          <td className="px-4 py-3 font-medium">
+                            {r.accepted_by_nurse_name ?? "—"}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">{r.ward}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
+                            >
+                              {r.shift === "M" ? "Morning" : "Night"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {log?.started_at
+                              ? new Date(log.started_at).toLocaleTimeString("en-GB", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {log?.ended_at ? (
+                              new Date(log.ended_at).toLocaleTimeString("en-GB", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            ) : log ? (
+                              <span className="text-emerald-600 text-xs font-medium">Running</span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">Not started</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums font-medium">
+                            {log?.hours_logged != null
+                              ? fmtHoursLog(Number(log.hours_logged))
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}
