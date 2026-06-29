@@ -272,6 +272,8 @@ export type Database = {
           latitude: number | null;
           longitude: number | null;
           ip_address: string | null;
+          is_locum: boolean;
+          locum_request_id: string | null;
         };
         Insert: {
           id?: string;
@@ -290,6 +292,8 @@ export type Database = {
           latitude?: number | null;
           longitude?: number | null;
           ip_address?: string | null;
+          is_locum?: boolean;
+          locum_request_id?: string | null;
         };
         Update: {
           id?: string;
@@ -308,6 +312,8 @@ export type Database = {
           latitude?: number | null;
           longitude?: number | null;
           ip_address?: string | null;
+          is_locum?: boolean;
+          locum_request_id?: string | null;
         };
         Relationships: [
           {

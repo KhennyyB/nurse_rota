@@ -323,12 +323,40 @@ function RotaPage() {
   // True once at least one assignment exists for the current window.
   const hasSchedule = !isLoading && assignments.length > 0;
 
+  // Filled locum requests for this window — used to highlight locum cells.
+  const { data: locumFilled = [] } = useQuery({
+    queryKey: ["locum-filled-rota", ymd(startDate), ymd(endDate)],
+    staleTime: 2 * 60 * 1000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("locum_requests")
+        .select("accepted_by_nurse_id, shift_date, shift")
+        .eq("status", "filled")
+        .gte("shift_date", ymd(startDate))
+        .lte("shift_date", ymd(endDate));
+      return (data ?? []) as {
+        accepted_by_nurse_id: string | null;
+        shift_date: string;
+        shift: string;
+      }[];
+    },
+  });
+
   // ── Derived data ─────────────────────────────────────────────────────────
   const cellMap = useMemo(() => {
     const m = new Map<string, Assignment>();
     assignments.forEach((a) => m.set(`${a.nurse_id}|${a.shift_date}`, a));
     return m;
   }, [assignments]);
+
+  // "nurseId|date" keys for every filled locum shift in this window.
+  const locumCellSet = useMemo(() => {
+    const s = new Set<string>();
+    locumFilled.forEach((lr) => {
+      if (lr.accepted_by_nurse_id) s.add(`${lr.accepted_by_nurse_id}|${lr.shift_date}`);
+    });
+    return s;
+  }, [locumFilled]);
 
   // Total scheduled hours per nurse for the current period.
   const nurseScheduledHours = useMemo(() => {
@@ -1358,7 +1386,12 @@ function RotaPage() {
                         )}
                       >
                         <div>{dt.toLocaleDateString("en", { weekday: "short" })}</div>
-                        <div className={cn("text-[10px] font-normal", isWeekend ? "text-red-400" : "text-muted-foreground")}>
+                        <div
+                          className={cn(
+                            "text-[10px] font-normal",
+                            isWeekend ? "text-red-400" : "text-muted-foreground",
+                          )}
+                        >
                           {dt.getDate()}/{dt.getMonth() + 1}
                         </div>
                       </th>
@@ -1404,6 +1437,7 @@ function RotaPage() {
                       const dateStr = ymd(dt);
                       const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
                       const cell = cellMap.get(`${n.id}|${dateStr}`);
+                      const isLocum = locumCellSet.has(`${n.id}|${dateStr}`);
                       // Visual-only: uses state (safe to lag one render behind)
                       const isDragOver =
                         dragging &&
@@ -1456,7 +1490,9 @@ function RotaPage() {
                             className={cn(
                               "block w-full text-[10px] font-bold py-1.5 rounded border transition",
                               cell
-                                ? shiftStyles[cell.shift]
+                                ? isLocum
+                                  ? "bg-violet-100 text-violet-900 border-violet-300"
+                                  : shiftStyles[cell.shift]
                                 : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
                               isDragOver && !isWindowLocked && "ring-2 ring-primary scale-105",
                               dragging && dragging.id === cell?.id && "opacity-40",
@@ -1476,7 +1512,7 @@ function RotaPage() {
                                   : "View only"
                             }
                           >
-                            {cell?.shift ?? "—"}
+                            {cell ? (isLocum ? `L·${cell.shift}` : cell.shift) : "—"}
                           </button>
                         </td>
                       );

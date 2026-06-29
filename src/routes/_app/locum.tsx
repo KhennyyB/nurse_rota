@@ -148,7 +148,7 @@ function LocumPage() {
   const isCNO = hasAnyRole(["cno", "admin"]);
   const isNurse = activeRole === "nurse";
 
-  type Tab = "my-requests" | "review" | "all" | "invites";
+  type Tab = "my-requests" | "review" | "all" | "invites" | "history";
   const defaultTab: Tab = isNurse ? "invites" : isCNO ? "review" : "my-requests";
   const [tab, setTab] = useState<Tab>(defaultTab);
 
@@ -200,6 +200,39 @@ function LocumPage() {
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as LocumRequest[];
+    },
+  });
+
+  const { data: filledRequests = [], isLoading: historyLoading } = useQuery({
+    queryKey: ["locum-history"],
+    enabled: hasAnyRole(["admin", "cno", "chief_matron"]),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("locum_requests")
+        .select("*")
+        .eq("status", "filled")
+        .order("accepted_at", { ascending: false });
+      if (error) throw error;
+      return data as LocumRequest[];
+    },
+  });
+
+  const { data: locumLogs = [] } = useQuery({
+    queryKey: ["locum-shift-logs"],
+    enabled: hasAnyRole(["admin", "cno", "chief_matron"]),
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_logs")
+        .select("nurse_id, shift_date, hours_logged, started_at, ended_at")
+        .eq("is_locum", true)
+        .order("shift_date", { ascending: false });
+      return (data ?? []) as {
+        nurse_id: string;
+        shift_date: string;
+        hours_logged: number | null;
+        started_at: string;
+        ended_at: string | null;
+      }[];
     },
   });
 
@@ -558,6 +591,9 @@ function LocumPage() {
           { id: "all" as Tab, label: "All Requests" },
         ]
       : []),
+    ...(hasAnyRole(["admin", "cno", "chief_matron"])
+      ? [{ id: "history" as Tab, label: "Locum Hours" }]
+      : []),
   ];
 
   return (
@@ -642,6 +678,9 @@ function LocumPage() {
         />
       )}
       {tab === "all" && <AllRequestsView requests={allRequests} loading={allLoading} />}
+      {tab === "history" && (
+        <LocumHistoryView requests={filledRequests} logs={locumLogs} loading={historyLoading} />
+      )}
 
       {/* Dialogs */}
       {showCreate && (
@@ -885,6 +924,145 @@ function AllRequestsView({ requests, loading }: { requests: LocumRequest[]; load
       {requests.map((req) => (
         <RequestCard key={req.id} request={req} />
       ))}
+    </div>
+  );
+}
+
+// ── Locum hours / history view ────────────────────────────────────────────────
+
+function LocumHistoryView({
+  requests,
+  logs,
+  loading,
+}: {
+  requests: LocumRequest[];
+  logs: {
+    nurse_id: string;
+    shift_date: string;
+    hours_logged: number | null;
+    started_at: string;
+    ended_at: string | null;
+  }[];
+  loading: boolean;
+}) {
+  if (loading) return <Spinner />;
+  if (!requests.length)
+    return (
+      <EmptyState
+        icon={<Clock className="h-8 w-8" />}
+        title="No locum shifts filled yet"
+        description="Completed locum shifts will appear here once a nurse accepts an invitation."
+      />
+    );
+
+  // Build a lookup: "nurseId|date" → log entry for actual hours
+  const logMap = new Map(logs.map((l) => [`${l.nurse_id}|${l.shift_date}`, l]));
+
+  // Per-nurse summary — shifts + total hours worked
+  const summary = Object.values(
+    requests.reduce<Record<string, { name: string; count: number; hours: number }>>((acc, r) => {
+      const key = r.accepted_by_nurse_id ?? "unknown";
+      if (!acc[key]) acc[key] = { name: r.accepted_by_nurse_name ?? "Unknown", count: 0, hours: 0 };
+      acc[key].count++;
+      const log = r.accepted_by_nurse_id
+        ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+        : undefined;
+      acc[key].hours += log?.hours_logged ?? 0;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b.count - a.count);
+
+  function fmtH(h: number) {
+    const hh = Math.floor(h);
+    const mm = Math.round((h - hh) * 60);
+    if (hh === 0) return `${mm}m`;
+    if (mm === 0) return `${hh}h`;
+    return `${hh}h ${mm}m`;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Per-nurse summary badges */}
+      <div className="flex flex-wrap gap-2">
+        {summary.map((s) => (
+          <div
+            key={s.name}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-violet-100 text-violet-800 text-xs font-medium"
+          >
+            <Stethoscope className="h-3.5 w-3.5" />
+            {s.name} · {s.count} shift{s.count !== 1 ? "s" : ""}
+            {s.hours > 0 && <> · {fmtH(s.hours)}</>}
+          </div>
+        ))}
+      </div>
+
+      {/* Full log table */}
+      <div className="rounded-lg border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-4 py-2.5">Date</th>
+              <th className="text-left px-4 py-2.5">Nurse</th>
+              <th className="text-left px-4 py-2.5">Ward</th>
+              <th className="text-left px-4 py-2.5">Facility</th>
+              <th className="text-center px-4 py-2.5">Shift</th>
+              <th className="text-center px-4 py-2.5">Hours</th>
+              <th className="text-center px-4 py-2.5">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {requests.map((r) => {
+              const log = r.accepted_by_nurse_id
+                ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+                : undefined;
+              return (
+                <tr key={r.id} className="hover:bg-muted/20">
+                  <td className="px-4 py-2.5 text-xs">{fmtDate(r.shift_date)}</td>
+                  <td className="px-4 py-2.5 font-medium text-sm">
+                    {r.accepted_by_nurse_name ?? "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.ward}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.facility}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span
+                      className={cn(
+                        "text-xs px-2 py-0.5 rounded-full font-semibold",
+                        r.shift === "M"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-indigo-100 text-indigo-700",
+                      )}
+                    >
+                      {r.shift === "M" ? "Morning" : "Night"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center text-xs font-semibold">
+                    {log?.hours_logged != null ? fmtH(log.hours_logged) : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    {!log ? (
+                      <span className="text-xs text-muted-foreground">Not started</span>
+                    ) : !log.ended_at ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(log.ended_at).toLocaleString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

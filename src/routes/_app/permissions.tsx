@@ -140,6 +140,11 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Accept / Decline a Locum Invite (Nurse)",
     roles: ROLES,
   },
+  {
+    key: "view_locum_hours",
+    label: "View Locum Hours Tracking",
+    roles: ["admin", "cno", "chief_matron"],
+  },
 ];
 
 const STORAGE_KEY = "nurse_rota_capabilities";

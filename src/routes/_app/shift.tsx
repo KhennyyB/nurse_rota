@@ -201,6 +201,23 @@ function ShiftPage() {
     refetchInterval: 30000,
   });
 
+  // Detect if today's assignment is a locum (bank) shift
+  const { data: todayLocum } = useQuery<{ id: string } | null>({
+    queryKey: ["my-locum-today", nurseId, today],
+    enabled: !!nurseId,
+    refetchInterval: 30000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("locum_requests")
+        .select("id")
+        .eq("accepted_by_nurse_id", nurseId!)
+        .eq("shift_date", today)
+        .eq("status", "filled")
+        .maybeSingle();
+      return data as { id: string } | null;
+    },
+  });
+
   // Current period summary
   const { data: periodHours } = useQuery<PeriodHours | null>({
     queryKey: ["my-period-hours", nurseId],
@@ -311,6 +328,8 @@ function ShiftPage() {
       latitude: geo?.lat ?? null,
       longitude: geo?.lng ?? null,
       ip_address: geo?.ip ?? null,
+      is_locum: !!todayLocum,
+      locum_request_id: todayLocum?.id ?? null,
     });
 
     if (error) return toast.error(error.message);
@@ -420,6 +439,11 @@ function ShiftPage() {
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
                   {assignment.shift === "M" ? "08:00 – 17:00" : "17:00 – 08:00"}
                 </span>
+                {todayLocum && (
+                  <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
+                    Bank Shift (Locum)
+                  </span>
+                )}
               </p>
             ) : (
               <p className="text-2xl font-bold mt-1 text-muted-foreground">
