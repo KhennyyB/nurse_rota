@@ -11,7 +11,7 @@ export const FACILITY_LOCATIONS: Record<string, { lat: number; lng: number; labe
 };
 
 // Nurses must be within this distance of any campus gate to clock in.
-export const GEO_FENCE_RADIUS_M = 1000;
+export const GEO_FENCE_RADIUS_M = 2000;
 
 function haversineMetres(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6_371_000;
