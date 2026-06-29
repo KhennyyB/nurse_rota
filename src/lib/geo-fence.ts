@@ -1,10 +1,7 @@
 // Geo-fence configuration for all facility locations.
 // Each facility key matches the `facility` field stored on nurse records.
 // Ikeja has two campuses — the nearest one is used for distance checking.
-export const FACILITY_LOCATIONS: Record<
-  string,
-  { lat: number; lng: number; label: string }[]
-> = {
+export const FACILITY_LOCATIONS: Record<string, { lat: number; lng: number; label: string }[]> = {
   Ikeja: [
     { lat: 6.6044, lng: 3.3458, label: "Ikeja — 91 Obafemi Awolowo Way" },
     { lat: 6.6153343, lng: 3.3458773, label: "Ikeja — 91 Adeniyi Jones, Ogba" },
@@ -14,7 +11,7 @@ export const FACILITY_LOCATIONS: Record<
 };
 
 // Nurses must be within this distance of any campus gate to clock in.
-export const GEO_FENCE_RADIUS_M = 300;
+export const GEO_FENCE_RADIUS_M = 1000;
 
 function haversineMetres(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6_371_000;
@@ -61,9 +58,7 @@ export async function verifyLocationAndCaptureIp(
           const nearest = nearestLocation(facility, lat, lng);
           if (!nearest) {
             reject(
-              new Error(
-                `No location configured for "${facility}". Contact your administrator.`,
-              ),
+              new Error(`No location configured for "${facility}". Contact your administrator.`),
             );
             return;
           }
@@ -81,7 +76,9 @@ export async function verifyLocationAndCaptureIp(
         let ip: string | null = null;
         try {
           const res = await Promise.race([
-            fetch("https://api.ipify.org?format=json").then((r) => r.json() as Promise<{ ip: string }>),
+            fetch("https://api.ipify.org?format=json").then(
+              (r) => r.json() as Promise<{ ip: string }>,
+            ),
             new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
           ]);
           ip = res.ip;
@@ -100,7 +97,9 @@ export async function verifyLocationAndCaptureIp(
           );
         } else if (err.code === err.POSITION_UNAVAILABLE) {
           reject(
-            new Error("Your location could not be determined. Check your GPS signal and try again."),
+            new Error(
+              "Your location could not be determined. Check your GPS signal and try again.",
+            ),
           );
         } else {
           reject(new Error("Location request timed out. Check your GPS signal and try again."));
