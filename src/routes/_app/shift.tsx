@@ -677,57 +677,84 @@ function ShiftPage() {
       </div>
 
       {/* Recent shift history */}
-      {currentPeriodLogs.length > 0 && (
-        <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-          <div className="px-5 py-4 border-b">
-            <h2 className="font-semibold text-sm">Shift history — current period</h2>
-          </div>
-          <div className="divide-y">
-            {currentPeriodLogs.map((log) => (
-              <div key={log.id} className="px-5 py-3 flex items-center justify-between text-sm">
-                <div className="flex items-center gap-3">
-                  <span
-                    className={cn(
-                      "h-7 w-7 rounded-full grid place-items-center text-xs font-bold",
-                      log.shift_type === "M"
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-indigo-100 text-indigo-700",
-                    )}
-                  >
-                    {log.shift_type}
-                  </span>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium">{log.shift_date}</p>
-                      {log.is_late && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
-                          <AlertTriangle className="h-2.5 w-2.5" />
-                          {log.late_minutes}m late
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {fmtTime(log.started_at)} →{" "}
-                      {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
-                    </p>
-                    {log.is_late && log.late_reason && (
-                      <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
-                    )}
-                  </div>
-                </div>
-                <div className="text-right">
-                  {log.hours_logged != null ? (
-                    <span className="font-semibold">{fmtHours(Number(log.hours_logged))}</span>
-                  ) : (
-                    <span className="text-emerald-600 text-xs font-medium flex items-center gap-1">
-                      <Clock className="h-3 w-3" /> Running
+      {currentPeriodLogs.length > 0 && <ShiftHistory logs={currentPeriodLogs} />}
+    </div>
+  );
+}
+
+const HISTORY_PAGE = 5;
+
+function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? logs : logs.slice(0, HISTORY_PAGE);
+
+  return (
+    <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+      <div className="px-5 py-4 border-b flex items-center justify-between">
+        <h2 className="font-semibold text-sm">Shift history — current period</h2>
+        <span className="text-xs text-muted-foreground">{logs.length} shifts</span>
+      </div>
+      <div className="divide-y">
+        {visible.map((log) => (
+          <div key={log.id} className="px-5 py-3 flex items-center justify-between text-sm">
+            <div className="flex items-center gap-3">
+              <span
+                className={cn(
+                  "h-7 w-7 rounded-full grid place-items-center text-xs font-bold",
+                  log.shift_type === "M"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-indigo-100 text-indigo-700",
+                )}
+              >
+                {log.shift_type}
+              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="font-medium">{log.shift_date}</p>
+                  {log.is_late && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {log.late_minutes}m late
                     </span>
                   )}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {fmtTime(log.started_at)} → {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
+                </p>
+                {log.is_late && log.late_reason && (
+                  <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
+                )}
               </div>
-            ))}
+            </div>
+            <div className="text-right">
+              {log.hours_logged != null ? (
+                <span className="font-semibold">{fmtHours(Number(log.hours_logged))}</span>
+              ) : (
+                <span className="text-emerald-600 text-xs font-medium flex items-center gap-1">
+                  <Clock className="h-3 w-3" /> Running
+                </span>
+              )}
+            </div>
           </div>
-        </div>
+        ))}
+      </div>
+      {!showAll && logs.length > HISTORY_PAGE && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground py-3 border-t underline"
+        >
+          Show all ({logs.length - HISTORY_PAGE} more)
+        </button>
+      )}
+      {showAll && logs.length > HISTORY_PAGE && (
+        <button
+          type="button"
+          onClick={() => setShowAll(false)}
+          className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground py-3 border-t underline"
+        >
+          Show less
+        </button>
       )}
     </div>
   );
