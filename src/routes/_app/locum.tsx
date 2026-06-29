@@ -26,14 +26,14 @@ import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { cn } from "@/lib/utils";
-import { Modal } from ".//staff";
+import { Modal } from "./staff";
 
 export const Route = createFileRoute("/_app/locum")({
   component: LocumPage,
 });
 
 // Wards eligible for locum across all facilities
-const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & Cathlab"];
+const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & CathLab"];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -131,10 +131,10 @@ const inp =
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1">
-      <label className="text-sm font-medium">{label}</label>
+    <label className="space-y-1 block">
+      <span className="text-sm font-medium">{label}</span>
       {children}
-    </div>
+    </label>
   );
 }
 
@@ -291,12 +291,22 @@ function LocumPage() {
 
     // Notify requesting matron
     await supabase.from("notification_state").upsert(
-      { user_id: req.requested_by, notif_key: `locum_approved_${req.id}`, is_read: false, updated_at: new Date().toISOString() },
+      {
+        user_id: req.requested_by,
+        notif_key: `locum_approved_${req.id}`,
+        is_read: false,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "user_id,notif_key" },
     );
     // Mark CNO's review notification as read
     await supabase.from("notification_state").upsert(
-      { user_id: user!.id, notif_key: `locum_review_${req.id}`, is_read: true, updated_at: new Date().toISOString() },
+      {
+        user_id: user!.id,
+        notif_key: `locum_review_${req.id}`,
+        is_read: true,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "user_id,notif_key" },
     );
 
@@ -328,11 +338,21 @@ function LocumPage() {
 
     // Notify requesting matron with decline reason
     await supabase.from("notification_state").upsert(
-      { user_id: req.requested_by, notif_key: `locum_declined_${req.id}`, is_read: false, updated_at: new Date().toISOString() },
+      {
+        user_id: req.requested_by,
+        notif_key: `locum_declined_${req.id}`,
+        is_read: false,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "user_id,notif_key" },
     );
     await supabase.from("notification_state").upsert(
-      { user_id: user!.id, notif_key: `locum_review_${req.id}`, is_read: true, updated_at: new Date().toISOString() },
+      {
+        user_id: user!.id,
+        notif_key: `locum_review_${req.id}`,
+        is_read: true,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "user_id,notif_key" },
     );
 
@@ -381,12 +401,19 @@ function LocumPage() {
         updated_at: new Date().toISOString(),
       }));
     if (notifRows.length) {
-      await supabase.from("notification_state").upsert(notifRows, { onConflict: "user_id,notif_key" });
+      await supabase
+        .from("notification_state")
+        .upsert(notifRows, { onConflict: "user_id,notif_key" });
     }
 
     // Mark matron's approved notification as actioned
     await supabase.from("notification_state").upsert(
-      { user_id: req.requested_by, notif_key: `locum_approved_${req.id}`, is_read: true, updated_at: new Date().toISOString() },
+      {
+        user_id: req.requested_by,
+        notif_key: `locum_approved_${req.id}`,
+        is_read: true,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "user_id,notif_key" },
     );
 
@@ -394,7 +421,9 @@ function LocumPage() {
       "Locum invites sent",
       `${req.ward} · ${req.shift === "M" ? "Morning" : "Night"} · ${fmtDate(req.shift_date)} · ${offNurses.length} nurse${offNurses.length !== 1 ? "s" : ""}`,
     );
-    toast.success(`Locum invites sent to ${offNurses.length} nurse${offNurses.length !== 1 ? "s" : ""}.`);
+    toast.success(
+      `Locum invites sent to ${offNurses.length} nurse${offNurses.length !== 1 ? "s" : ""}.`,
+    );
     qc.invalidateQueries({ queryKey: ["locum-my"] });
     qc.invalidateQueries({ queryKey: ["locum-bell"] });
     setSendingReq(null);
@@ -456,12 +485,22 @@ function LocumPage() {
     if (invite.locum_request) {
       const req = invite.locum_request;
       await supabase.from("notification_state").upsert(
-        { user_id: req.requested_by, notif_key: `locum_filled_matron_${req.id}`, is_read: false, updated_at: new Date().toISOString() },
+        {
+          user_id: req.requested_by,
+          notif_key: `locum_filled_matron_${req.id}`,
+          is_read: false,
+          updated_at: new Date().toISOString(),
+        },
         { onConflict: "user_id,notif_key" },
       );
       if (req.reviewed_by) {
         await supabase.from("notification_state").upsert(
-          { user_id: req.reviewed_by, notif_key: `locum_filled_cno_${req.id}`, is_read: false, updated_at: new Date().toISOString() },
+          {
+            user_id: req.reviewed_by,
+            notif_key: `locum_filled_cno_${req.id}`,
+            is_read: false,
+            updated_at: new Date().toISOString(),
+          },
           { onConflict: "user_id,notif_key" },
         );
       }
@@ -481,7 +520,11 @@ function LocumPage() {
   async function handleDeclineInvite(invite: LocumInvite, reason: string) {
     await supabase
       .from("locum_invites")
-      .update({ status: "declined", decline_reason: reason, responded_at: new Date().toISOString() })
+      .update({
+        status: "declined",
+        decline_reason: reason,
+        responded_at: new Date().toISOString(),
+      })
       .eq("id", invite.id);
 
     await logAudit(
@@ -500,7 +543,13 @@ function LocumPage() {
   type TabDef = { id: Tab; label: string; badge?: number };
   const tabs: TabDef[] = [
     ...(isNurse
-      ? [{ id: "invites" as Tab, label: "My Locum Invites", badge: myInvites.filter((i) => i.status === "pending").length }]
+      ? [
+          {
+            id: "invites" as Tab,
+            label: "My Locum Invites",
+            badge: myInvites.filter((i) => i.status === "pending").length,
+          },
+        ]
       : []),
     ...(isMatron ? [{ id: "my-requests" as Tab, label: "My Requests" }] : []),
     ...(isCNO
@@ -532,7 +581,10 @@ function LocumPage() {
       <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
         <span className="font-medium text-foreground">Eligible wards:</span>
         {LOCUM_WARDS.map((w) => (
-          <span key={w} className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium">
+          <span
+            key={w}
+            className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium"
+          >
             {w}
           </span>
         ))}
@@ -603,7 +655,10 @@ function LocumPage() {
         <ReviewModal
           request={reviewReq}
           action={reviewAction}
-          onClose={() => { setReviewReq(null); setReviewAction(null); }}
+          onClose={() => {
+            setReviewReq(null);
+            setReviewAction(null);
+          }}
           onApprove={handleApprove}
           onDecline={handleDecline}
         />
@@ -619,7 +674,10 @@ function LocumPage() {
         <RespondInviteModal
           invite={respondInvite}
           action={respondAction}
-          onClose={() => { setRespondInvite(null); setRespondAction(null); }}
+          onClose={() => {
+            setRespondInvite(null);
+            setRespondAction(null);
+          }}
           onAccept={handleAcceptInvite}
           onDecline={handleDeclineInvite}
         />
@@ -661,19 +719,16 @@ function NurseInvitesView({
             Pending invites — respond soon
           </p>
           {pending.map((inv) => (
-            <InviteCard
-              key={inv.id}
-              invite={inv}
-              showActions
-              onRespond={onRespond}
-            />
+            <InviteCard key={inv.id} invite={inv} showActions onRespond={onRespond} />
           ))}
         </section>
       )}
       {past.length > 0 && (
         <section className="space-y-3">
           <p className="text-sm font-semibold text-muted-foreground">Past invites</p>
-          {past.map((inv) => <InviteCard key={inv.id} invite={inv} />)}
+          {past.map((inv) => (
+            <InviteCard key={inv.id} invite={inv} />
+          ))}
         </section>
       )}
     </div>
@@ -696,7 +751,12 @@ function InviteCard({
         <div className="space-y-1 min-w-0">
           <p className="font-medium text-sm">
             {req?.ward ?? "Unknown Ward"} ·{" "}
-            <span className={cn("text-xs font-semibold", req?.shift === "M" ? "text-amber-600" : "text-blue-600")}>
+            <span
+              className={cn(
+                "text-xs font-semibold",
+                req?.shift === "M" ? "text-amber-600" : "text-blue-600",
+              )}
+            >
               {req?.shift === "M" ? "Morning Shift" : "Night Shift"}
             </span>
           </p>
@@ -704,7 +764,12 @@ function InviteCard({
             {req ? fmtDate(req.shift_date) : "—"} · {req?.facility}
           </p>
         </div>
-        <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium shrink-0", INVITE_COLOR[invite.status])}>
+        <span
+          className={cn(
+            "text-xs px-2 py-0.5 rounded-full font-medium shrink-0",
+            INVITE_COLOR[invite.status],
+          )}
+        >
           {INVITE_LABEL[invite.status]}
         </span>
       </div>
@@ -850,10 +915,20 @@ function RequestCard({
         <div className="flex-1 min-w-0 space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="font-medium text-sm">{req.ward}</p>
-            <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", req.shift === "M" ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700")}>
+            <span
+              className={cn(
+                "text-xs px-2 py-0.5 rounded-full font-medium",
+                req.shift === "M" ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700",
+              )}
+            >
               {req.shift === "M" ? "Morning" : "Night"}
             </span>
-            <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", STATUS_COLOR[req.status])}>
+            <span
+              className={cn(
+                "text-xs px-2 py-0.5 rounded-full font-medium",
+                STATUS_COLOR[req.status],
+              )}
+            >
               {STATUS_LABEL[req.status]}
             </span>
           </div>
@@ -861,23 +936,42 @@ function RequestCard({
             {fmtDate(req.shift_date)} · {req.facility} · Requested by {req.requested_by_name}
           </p>
         </div>
-        <ChevronRight className={cn("h-4 w-4 text-muted-foreground shrink-0 transition-transform", expanded && "rotate-90")} />
+        <ChevronRight
+          className={cn(
+            "h-4 w-4 text-muted-foreground shrink-0 transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
       </div>
 
       {expanded && (
         <div className="border-t px-4 py-4 space-y-4">
           {/* Ward assessment questions */}
           <div className="grid grid-cols-3 gap-3">
-            <StatBox icon={<Users className="h-4 w-4" />} label="Nurses in Ward" value={req.nurses_in_ward} />
-            <StatBox icon={<Activity className="h-4 w-4" />} label="Ventilated Patients" value={req.ventilated_patients} />
-            <StatBox icon={<Stethoscope className="h-4 w-4" />} label="HDU Nurses" value={req.hdu_nurses} />
+            <StatBox
+              icon={<Users className="h-4 w-4" />}
+              label="Nurses in Ward"
+              value={req.nurses_in_ward}
+            />
+            <StatBox
+              icon={<Activity className="h-4 w-4" />}
+              label="Ventilated Patients"
+              value={req.ventilated_patients}
+            />
+            <StatBox
+              icon={<Stethoscope className="h-4 w-4" />}
+              label="HDU Nurses"
+              value={req.hdu_nurses}
+            />
           </div>
 
           {req.status === "declined" && req.decline_reason && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-md px-3 py-2.5">
               <MessageSquare className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs font-semibold text-red-700">Decline reason from {req.reviewed_by_name}</p>
+                <p className="text-xs font-semibold text-red-700">
+                  Decline reason from {req.reviewed_by_name}
+                </p>
                 <p className="text-xs text-red-600 mt-0.5">{req.decline_reason}</p>
               </div>
             </div>
@@ -890,7 +984,16 @@ function RequestCard({
                 Shift accepted by{" "}
                 <span className="font-semibold">{req.accepted_by_nurse_name}</span>
                 {req.accepted_at && (
-                  <> · {new Date(req.accepted_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</>
+                  <>
+                    {" "}
+                    ·{" "}
+                    {new Date(req.accepted_at).toLocaleString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </>
                 )}
               </p>
             </div>
@@ -899,7 +1002,10 @@ function RequestCard({
           <div className="flex gap-2 flex-wrap">
             {showMatronActions && req.status === "approved" && onSendInvites && (
               <button
-                onClick={(e) => { e.stopPropagation(); onSendInvites(req); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSendInvites(req);
+                }}
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90"
               >
                 <Send className="h-3.5 w-3.5" />
@@ -909,14 +1015,20 @@ function RequestCard({
             {showCNOActions && req.status === "pending" && onReview && (
               <>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onReview(req, "approve"); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReview(req, "approve");
+                  }}
                   className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
                 >
                   <Check className="h-3.5 w-3.5" />
                   Approve
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onReview(req, "decline"); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReview(req, "decline");
+                  }}
                   className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs font-medium hover:bg-muted"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -984,7 +1096,8 @@ function CreateRequestModal({
     e.preventDefault();
     if (!shiftDate || !facility) return toast.error("Please select a facility.");
     if (!ward) return toast.error("Please select a ward.");
-    if (!nursesInWard || !ventPatients || !hduNurses) return toast.error("Please answer all assessment questions.");
+    if (!nursesInWard || !ventPatients || !hduNurses)
+      return toast.error("Please answer all assessment questions.");
     setBusy(true);
     try {
       await onSubmit({
@@ -1011,6 +1124,7 @@ function CreateRequestModal({
             <input
               type="date"
               required
+              aria-label="Shift date"
               className={inp}
               value={shiftDate}
               min={todayYmd()}
@@ -1018,7 +1132,12 @@ function CreateRequestModal({
             />
           </Field>
           <Field label="Shift Type *">
-            <select className={inp} value={shift} onChange={(e) => setShift(e.target.value as "M" | "N")}>
+            <select
+              aria-label="Shift type"
+              className={inp}
+              value={shift}
+              onChange={(e) => setShift(e.target.value as "M" | "N")}
+            >
               <option value="M">Morning (M)</option>
               <option value="N">Night (N)</option>
             </select>
@@ -1026,16 +1145,25 @@ function CreateRequestModal({
         </div>
 
         <Field label="Facility *">
-          <select className={inp} value={facility} onChange={(e) => handleFacilityChange(e.target.value)} required>
+          <select
+            aria-label="Facility"
+            className={inp}
+            value={facility}
+            onChange={(e) => handleFacilityChange(e.target.value)}
+            required
+          >
             <option value="">Select facility…</option>
             {facilities.map((f) => (
-              <option key={f} value={f}>{f}</option>
+              <option key={f} value={f}>
+                {f}
+              </option>
             ))}
           </select>
         </Field>
 
         <Field label="Ward *">
           <select
+            aria-label="Ward"
             className={inp}
             value={ward}
             onChange={(e) => setWard(e.target.value)}
@@ -1044,7 +1172,9 @@ function CreateRequestModal({
           >
             <option value="">{facility ? "Select ward…" : "Select a facility first"}</option>
             {facilityWards.map((w) => (
-              <option key={w.name} value={w.name}>{w.name}</option>
+              <option key={w.name} value={w.name}>
+                {w.name}
+              </option>
             ))}
           </select>
         </Field>
@@ -1133,7 +1263,8 @@ function ReviewModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (action === "decline" && !reason.trim()) return toast.error("Please provide a reason for declining.");
+    if (action === "decline" && !reason.trim())
+      return toast.error("Please provide a reason for declining.");
     setBusy(true);
     try {
       if (action === "approve") await onApprove(request);
@@ -1151,16 +1282,37 @@ function ReviewModal({
     <Modal title={isDecline ? "Decline Locum Request" : "Approve Locum Request"} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <div className="rounded-md bg-muted/40 p-4 space-y-2 text-sm">
-          <p><span className="font-medium">Ward:</span> {request.ward} · {request.facility}</p>
-          <p><span className="font-medium">Date:</span> {fmtDate(request.shift_date)}</p>
-          <p><span className="font-medium">Shift:</span> {request.shift === "M" ? "Morning" : "Night"}</p>
-          <p><span className="font-medium">Requested by:</span> {request.requested_by_name}</p>
+          <p>
+            <span className="font-medium">Ward:</span> {request.ward} · {request.facility}
+          </p>
+          <p>
+            <span className="font-medium">Date:</span> {fmtDate(request.shift_date)}
+          </p>
+          <p>
+            <span className="font-medium">Shift:</span>{" "}
+            {request.shift === "M" ? "Morning" : "Night"}
+          </p>
+          <p>
+            <span className="font-medium">Requested by:</span> {request.requested_by_name}
+          </p>
         </div>
 
         <div className="grid grid-cols-3 gap-3">
-          <StatBox icon={<Users className="h-4 w-4" />} label="Nurses in Ward" value={request.nurses_in_ward} />
-          <StatBox icon={<Activity className="h-4 w-4" />} label="Ventilated" value={request.ventilated_patients} />
-          <StatBox icon={<Stethoscope className="h-4 w-4" />} label="HDU Nurses" value={request.hdu_nurses} />
+          <StatBox
+            icon={<Users className="h-4 w-4" />}
+            label="Nurses in Ward"
+            value={request.nurses_in_ward}
+          />
+          <StatBox
+            icon={<Activity className="h-4 w-4" />}
+            label="Ventilated"
+            value={request.ventilated_patients}
+          />
+          <StatBox
+            icon={<Stethoscope className="h-4 w-4" />}
+            label="HDU Nurses"
+            value={request.hdu_nurses}
+          />
         </div>
 
         {isDecline && (
@@ -1178,7 +1330,8 @@ function ReviewModal({
 
         {!isDecline && (
           <p className="text-sm text-muted-foreground">
-            Approving this request will notify the matron to send locum invites to nurses on OFF duty on this date.
+            Approving this request will notify the matron to send locum invites to nurses on OFF
+            duty on this date.
           </p>
         )}
 
@@ -1193,10 +1346,20 @@ function ReviewModal({
                 : "bg-emerald-600 text-white hover:bg-emerald-700",
             )}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : isDecline ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : isDecline ? (
+              <X className="h-4 w-4" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
             {isDecline ? "Decline Request" : "Approve Request"}
           </button>
-          <button type="button" onClick={onClose} className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted"
+          >
             Cancel
           </button>
         </div>
@@ -1275,8 +1438,13 @@ function SendInvitesModal({
     <Modal title="Send Locum Invites" onClose={onClose}>
       <div className="space-y-4">
         <div className="rounded-md bg-muted/40 p-4 space-y-1 text-sm">
-          <p><span className="font-medium">Date:</span> {fmtDate(request.shift_date)}</p>
-          <p><span className="font-medium">Shift:</span> {request.shift === "M" ? "Morning" : "Night"} · {request.ward} · {request.facility}</p>
+          <p>
+            <span className="font-medium">Date:</span> {fmtDate(request.shift_date)}
+          </p>
+          <p>
+            <span className="font-medium">Shift:</span>{" "}
+            {request.shift === "M" ? "Morning" : "Night"} · {request.ward} · {request.facility}
+          </p>
         </div>
 
         <p className="text-sm text-muted-foreground">
@@ -1292,16 +1460,23 @@ function SendInvitesModal({
         ) : !offNurses?.length ? (
           <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-md px-3 py-2.5 text-sm text-amber-700">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-            <p>No nurses are on OFF duty on this date for <strong>{request.facility}</strong>. The invite cannot be sent.</p>
+            <p>
+              No nurses are on OFF duty on this date for <strong>{request.facility}</strong>. The
+              invite cannot be sent.
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
             <p className="text-sm font-medium">
-              <span className="text-primary font-bold">{offNurses.length}</span> nurse{offNurses.length !== 1 ? "s" : ""} will receive an invite:
+              <span className="text-primary font-bold">{offNurses.length}</span> nurse
+              {offNurses.length !== 1 ? "s" : ""} will receive an invite:
             </p>
             <ul className="space-y-1 max-h-40 overflow-y-auto">
               {offNurses.map((n) => (
-                <li key={n.nurse_id} className="flex items-center gap-2 text-sm text-muted-foreground">
+                <li
+                  key={n.nurse_id}
+                  className="flex items-center gap-2 text-sm text-muted-foreground"
+                >
                   <Clock className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
                   {n.nurse_name}
                 </li>
@@ -1319,7 +1494,10 @@ function SendInvitesModal({
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Send Invites
           </button>
-          <button onClick={onClose} className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted">
+          <button
+            onClick={onClose}
+            className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted"
+          >
             Cancel
           </button>
         </div>
@@ -1366,17 +1544,26 @@ function RespondInviteModal({
     <Modal title={isDecline ? "Decline Locum Invite" : "Accept Locum Shift"} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <div className="rounded-md bg-muted/40 p-4 space-y-1 text-sm">
-          <p><span className="font-medium">Ward:</span> {req?.ward ?? "—"} · {req?.facility}</p>
-          <p><span className="font-medium">Date:</span> {req ? fmtDate(req.shift_date) : "—"}</p>
+          <p>
+            <span className="font-medium">Ward:</span> {req?.ward ?? "—"} · {req?.facility}
+          </p>
+          <p>
+            <span className="font-medium">Date:</span> {req ? fmtDate(req.shift_date) : "—"}
+          </p>
           <p>
             <span className="font-medium">Shift:</span>{" "}
-            {req?.shift === "M" ? "Morning (08:00 – 17:00)" : req?.shift === "N" ? "Night (17:00 – 08:00)" : "—"}
+            {req?.shift === "M"
+              ? "Morning (08:00 – 17:00)"
+              : req?.shift === "N"
+                ? "Night (17:00 – 08:00)"
+                : "—"}
           </p>
         </div>
 
         {!isDecline && (
           <p className="text-sm text-muted-foreground">
-            By accepting, this locum shift will be added to your schedule. You will be the first to accept so the shift is yours.
+            By accepting, this locum shift will be added to your schedule. You will be the first to
+            accept so the shift is yours.
           </p>
         )}
 
@@ -1404,10 +1591,20 @@ function RespondInviteModal({
                 : "bg-emerald-600 text-white hover:bg-emerald-700",
             )}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : isDecline ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : isDecline ? (
+              <X className="h-4 w-4" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
             {isDecline ? "Decline Shift" : "Accept Shift"}
           </button>
-          <button type="button" onClick={onClose} className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted"
+          >
             Cancel
           </button>
         </div>

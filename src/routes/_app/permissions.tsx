@@ -118,6 +118,28 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   { key: "view_audit", label: "View Audit Log", roles: ["admin", "cno"] },
   { key: "manage_roles", label: "Assign / Revoke Roles", roles: ["admin"] },
+
+  // ── Bank Shift (Locum) ─────────────────────────────────────────────────────
+  {
+    key: "request_locum",
+    label: "Initiate Locum Shift Request",
+    roles: ["admin", "chief_matron"],
+  },
+  {
+    key: "approve_locum",
+    label: "Approve / Decline Locum Request (CNO)",
+    roles: ["admin", "cno"],
+  },
+  {
+    key: "send_locum_invites",
+    label: "Send Locum Invites to OFF Nurses",
+    roles: ["admin", "chief_matron"],
+  },
+  {
+    key: "respond_locum_invite",
+    label: "Accept / Decline a Locum Invite (Nurse)",
+    roles: ROLES,
+  },
 ];
 
 const STORAGE_KEY = "nurse_rota_capabilities";

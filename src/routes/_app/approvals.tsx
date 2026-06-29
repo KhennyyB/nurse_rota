@@ -351,12 +351,14 @@ function ApprovalsPage() {
 
   // ── DB actions ─────────────────────────────────────────────────────────────
 
+  type AssignStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+
   // Scope a status update to nurses who belong to win.facility (+ ward filter).
   async function scopedStatusUpdate(
     win: RotaWindow,
-    toStatus: string,
-    fromStatus?: string,
-    neqStatus?: string,
+    toStatus: AssignStatus,
+    fromStatus?: AssignStatus,
+    neqStatus?: AssignStatus,
   ): Promise<string | null> {
     const facilityIds = allNurses.filter((n) => n.facility === win.facility).map((n) => n.id);
     if (!facilityIds.length) return null;

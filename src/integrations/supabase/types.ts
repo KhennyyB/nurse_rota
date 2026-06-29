@@ -420,6 +420,116 @@ export type Database = {
         };
         Relationships: [];
       };
+      locum_requests: {
+        Row: {
+          id: string;
+          shift_date: string;
+          shift: string;
+          facility: string;
+          ward: string;
+          nurses_in_ward: number;
+          ventilated_patients: number;
+          hdu_nurses: number;
+          status: string;
+          requested_by: string;
+          requested_by_name: string;
+          reviewed_by: string | null;
+          reviewed_by_name: string | null;
+          decline_reason: string | null;
+          reviewed_at: string | null;
+          accepted_by_nurse_id: string | null;
+          accepted_by_nurse_name: string | null;
+          accepted_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          shift_date: string;
+          shift: string;
+          facility: string;
+          ward: string;
+          nurses_in_ward: number;
+          ventilated_patients: number;
+          hdu_nurses: number;
+          status?: string;
+          requested_by: string;
+          requested_by_name: string;
+          reviewed_by?: string | null;
+          reviewed_by_name?: string | null;
+          decline_reason?: string | null;
+          reviewed_at?: string | null;
+          accepted_by_nurse_id?: string | null;
+          accepted_by_nurse_name?: string | null;
+          accepted_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          shift_date?: string;
+          shift?: string;
+          facility?: string;
+          ward?: string;
+          nurses_in_ward?: number;
+          ventilated_patients?: number;
+          hdu_nurses?: number;
+          status?: string;
+          requested_by?: string;
+          requested_by_name?: string;
+          reviewed_by?: string | null;
+          reviewed_by_name?: string | null;
+          decline_reason?: string | null;
+          reviewed_at?: string | null;
+          accepted_by_nurse_id?: string | null;
+          accepted_by_nurse_name?: string | null;
+          accepted_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      locum_invites: {
+        Row: {
+          id: string;
+          locum_request_id: string;
+          nurse_id: string;
+          nurse_name: string;
+          status: string;
+          decline_reason: string | null;
+          responded_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          locum_request_id: string;
+          nurse_id: string;
+          nurse_name: string;
+          status?: string;
+          decline_reason?: string | null;
+          responded_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          locum_request_id?: string;
+          nurse_id?: string;
+          nurse_name?: string;
+          status?: string;
+          decline_reason?: string | null;
+          responded_at?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "locum_invites_locum_request_id_fkey";
+            columns: ["locum_request_id"];
+            isOneToOne: false;
+            referencedRelation: "locum_requests";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: {
       [_ in never]: never;
@@ -457,6 +567,10 @@ export type Database = {
       auto_end_overdue_shifts: {
         Args: Record<string, never>;
         Returns: number;
+      };
+      auto_close_period: {
+        Args: Record<string, never>;
+        Returns: { closed: boolean; period_start: string | null; period_end: string | null } | null;
       };
     };
     Enums: {
