@@ -201,20 +201,26 @@ function ShiftPage() {
     refetchInterval: 30000,
   });
 
-  // Detect if today's assignment is a locum (bank) shift
-  const { data: todayLocum } = useQuery<{ id: string } | null>({
+  // Detect if today's assignment is a locum (bank) shift.
+  // We fetch shift + ward so we can synthesize a correct assignment even when
+  // the shift_assignments row still reads "OFF" (e.g. RLS prevented the update).
+  const { data: todayLocum } = useQuery<{
+    id: string;
+    shift: "M" | "N";
+    ward: string;
+  } | null>({
     queryKey: ["my-locum-today", nurseId, today],
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
       const { data } = await supabase
         .from("locum_requests")
-        .select("id")
+        .select("id, shift, ward")
         .eq("accepted_by_nurse_id", nurseId!)
         .eq("shift_date", today)
         .eq("status", "filled")
         .maybeSingle();
-      return data as { id: string } | null;
+      return data as { id: string; shift: "M" | "N"; ward: string } | null;
     },
   });
 
@@ -287,7 +293,18 @@ function ShiftPage() {
   }
 
   // Matrons (job role "Matron") have no rota assignments — fall back to synthetic.
-  const assignment = queryAssignment ?? matronAssignment;
+  // Locum nurses: if todayLocum exists we override regardless of what shift_assignments says
+  // (it may still read "OFF" if the RLS update didn't propagate).
+  const locumAssignment: Assignment | null = todayLocum
+    ? {
+        id: queryAssignment?.id ?? "",
+        shift: todayLocum.shift,
+        shift_date: today,
+        ward: todayLocum.ward,
+        status: "published",
+      }
+    : null;
+  const assignment = locumAssignment ?? queryAssignment ?? matronAssignment;
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
