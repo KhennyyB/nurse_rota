@@ -53,6 +53,7 @@ type RotaWindow = {
   assignmentCount: number;
   nurseCount: number;
   ward: string | null;
+  facility: string | null;
 };
 
 type ApprovalStep = { key: string; label: string; status: string };
@@ -73,20 +74,27 @@ function dominantStatus(statuses: string[]): WindowStatus {
   return "draft";
 }
 
-function groupIntoWindows(rows: PendingRow[]): RotaWindow[] {
+function groupIntoWindows(
+  rows: PendingRow[],
+  nurseToFacility: Map<string, string | null>,
+): RotaWindow[] {
   if (!rows.length) return [];
 
-  const byWard = new Map<string, PendingRow[]>();
+  // Group by facility+ward so same-ward-name across facilities stay separate.
+  const byKey = new Map<string, PendingRow[]>();
   for (const row of rows) {
-    const key = row.ward ?? "__NONE__";
-    if (!byWard.has(key)) byWard.set(key, []);
-    byWard.get(key)!.push(row);
+    const fac = nurseToFacility.get(row.nurse_id) ?? null;
+    const key = `${fac ?? "__NONE__"}||${row.ward ?? "__NONE__"}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push(row);
   }
 
   const windows: RotaWindow[] = [];
-  for (const [wardKey, wardRows] of byWard) {
-    const ward = wardKey === "__NONE__" ? null : wardKey;
-    const sorted = [...wardRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
+  for (const [key, keyRows] of byKey) {
+    const [facPart, wardPart] = key.split("||");
+    const facility = facPart === "__NONE__" ? null : facPart;
+    const ward = wardPart === "__NONE__" ? null : wardPart;
+    const sorted = [...keyRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
     let cluster: PendingRow[] = [sorted[0]];
 
     for (let i = 1; i < sorted.length; i++) {
@@ -96,21 +104,23 @@ function groupIntoWindows(rows: PendingRow[]): RotaWindow[] {
           86400000,
       );
       if (diff > 14) {
-        windows.push(makeWindow(cluster, ward));
+        windows.push(makeWindow(cluster, ward, facility));
         cluster = [];
       }
       cluster.push(sorted[i]);
     }
-    if (cluster.length) windows.push(makeWindow(cluster, ward));
+    if (cluster.length) windows.push(makeWindow(cluster, ward, facility));
   }
 
   return windows.sort(
     (a, b) =>
-      b.startDate.localeCompare(a.startDate) || (a.ward ?? "").localeCompare(b.ward ?? ""),
+      b.startDate.localeCompare(a.startDate) ||
+      (a.facility ?? "").localeCompare(b.facility ?? "") ||
+      (a.ward ?? "").localeCompare(b.ward ?? ""),
   );
 }
 
-function makeWindow(rows: PendingRow[], ward: string | null): RotaWindow {
+function makeWindow(rows: PendingRow[], ward: string | null, facility: string | null): RotaWindow {
   const dates = rows.map((r) => r.shift_date).sort();
   return {
     startDate: dates[0],
@@ -119,11 +129,12 @@ function makeWindow(rows: PendingRow[], ward: string | null): RotaWindow {
     assignmentCount: rows.length,
     nurseCount: new Set(rows.map((r) => r.nurse_id)).size,
     ward,
+    facility,
   };
 }
 
 function winKey(win: RotaWindow): string {
-  return `${win.startDate}|${win.ward ?? ""}`;
+  return `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
 }
 
 function fmtDate(d: string) {
@@ -182,7 +193,6 @@ function ApprovalsPage() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
-  const [exportFacility, setExportFacility] = useState<Record<string, string>>({});
   const [showAllPeriods, setShowAllPeriods] = useState(false);
 
   // Non-admins are locked to their own facility.
@@ -233,25 +243,34 @@ function ApprovalsPage() {
     },
   });
 
-  const windows = groupIntoWindows(rows);
+  // nurse_id → facility map (built once from allNurses).
+  const nurseToFacility = useMemo(
+    () => new Map(allNurses.map((n) => [n.id, n.facility])),
+    [allNurses],
+  );
 
-  // Precompute per-window metadata once so it can drive both filtering and rendering.
+  const windows = useMemo(
+    () => groupIntoWindows(rows, nurseToFacility),
+    [rows, nurseToFacility],
+  );
+
+  // Precompute per-window metadata (extraStaff). Facility is now on the window itself.
   const windowMeta = useMemo(() => {
     return new Map(
       windows.map((win) => {
+        const facilityIdSet = new Set(
+          allNurses.filter((n) => n.facility === win.facility).map((n) => n.id),
+        );
         const winRows = rows.filter(
           (r) =>
             r.shift_date >= win.startDate &&
             r.shift_date <= win.endDate &&
+            facilityIdSet.has(r.nurse_id) &&
             (win.ward !== null ? r.ward === win.ward : r.ward === null),
         );
         const winNurseIds = new Set(winRows.map((r) => r.nurse_id));
         const winNurses = allNurses.filter((n) => winNurseIds.has(n.id));
-        const winFacilities = [
-          ...new Set(winNurses.map((n) => n.facility).filter((f): f is string => !!f)),
-        ].sort();
 
-        // Nurses with above-baseline working shifts = enforcement added extra shifts.
         const winShiftCounts = new Map<string, number>();
         for (const r of winRows) {
           if (r.shift === "M" || r.shift === "N")
@@ -276,19 +295,16 @@ function ApprovalsPage() {
           }
         }
 
-        return [winKey(win), { winFacilities, extraStaff }] as const;
+        return [winKey(win), { extraStaff }] as const;
       }),
     );
   }, [windows, rows, allNurses]);
 
-  // Facilities that have at least one window.
-  const availableFacilities = useMemo(() => {
-    const facs = new Set<string>();
-    for (const meta of windowMeta.values()) {
-      meta.winFacilities.forEach((f) => facs.add(f));
-    }
-    return [...facs].sort();
-  }, [windowMeta]);
+  // Facilities that have at least one window — derived directly from window objects.
+  const availableFacilities = useMemo(
+    () => [...new Set(windows.map((w) => w.facility).filter((f): f is string => !!f))].sort(),
+    [windows],
+  );
 
   // Auto-select first available facility when data loads (admin only — non-admins are locked).
   const effectiveFacility =
@@ -298,11 +314,8 @@ function ApprovalsPage() {
   // Windows that belong to the selected facility.
   const facilityWindows = useMemo(() => {
     if (!effectiveFacility) return windows;
-    return windows.filter((win) => {
-      const meta = windowMeta.get(winKey(win));
-      return meta?.winFacilities.includes(effectiveFacility) ?? false;
-    });
-  }, [windows, windowMeta, effectiveFacility]);
+    return windows.filter((win) => win.facility === effectiveFacility);
+  }, [windows, effectiveFacility]);
 
   // For each ward, only the most recent period belongs in approvals.
   // Older fully-published periods are archived in Reports.
@@ -316,7 +329,7 @@ function ApprovalsPage() {
     const latestByWard = new Map<string, RotaWindow>();
     for (const win of facilityWindows) {
       if (win.status === "published" && win.endDate < cutoffYmd) continue;
-      const wardKey = win.ward ?? "__COVERAGE__";
+      const wardKey = `${win.facility ?? ""}|${win.ward ?? "__COVERAGE__"}`;
       const existing = latestByWard.get(wardKey);
       if (!existing || win.startDate > existing.startDate) {
         latestByWard.set(wardKey, win);
@@ -338,33 +351,49 @@ function ApprovalsPage() {
 
   // ── DB actions ─────────────────────────────────────────────────────────────
 
+  // Scope a status update to nurses who belong to win.facility (+ ward filter).
+  async function scopedStatusUpdate(
+    win: RotaWindow,
+    toStatus: string,
+    fromStatus?: string,
+    neqStatus?: string,
+  ): Promise<string | null> {
+    const facilityIds = allNurses.filter((n) => n.facility === win.facility).map((n) => n.id);
+    if (!facilityIds.length) return null;
+    for (let i = 0; i < facilityIds.length; i += 200) {
+      let q = supabase
+        .from("shift_assignments")
+        .update({ status: toStatus })
+        .gte("shift_date", win.startDate)
+        .lte("shift_date", win.endDate)
+        .in("nurse_id", facilityIds.slice(i, i + 200));
+      if (win.ward !== null) q = q.eq("ward", win.ward);
+      else q = q.is("ward", null);
+      if (fromStatus) q = q.eq("status", fromStatus);
+      if (neqStatus) q = q.neq("status", neqStatus);
+      const { error } = await q;
+      if (error) return error.message;
+    }
+    return null;
+  }
+
   async function submitDraft(win: RotaWindow) {
     setBusy(winKey(win));
-    const base = supabase
-      .from("shift_assignments")
-      .update({ status: "submitted" })
-      .gte("shift_date", win.startDate)
-      .lte("shift_date", win.endDate)
-      .eq("status", "draft");
-    const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
-    if (error) {
+    const err = await scopedStatusUpdate(win, "submitted", "draft");
+    if (err) {
       setBusy(null);
-      return toast.error(error.message);
+      return toast.error(err);
     }
 
     // When a ward window is submitted, co-submit coverage nurses and interns for
     // the same facility whose assignments still sit at draft (ward = null in DB).
     if (win.ward !== null) {
-      const winNurseIds = new Set(
-        rows
-          .filter(
-            (r) => r.shift_date >= win.startDate && r.shift_date <= win.endDate && r.ward === win.ward,
-          )
-          .map((r) => r.nurse_id),
-      );
-      const facility = allNurses.find((n) => winNurseIds.has(n.id))?.facility ?? null;
       const globalIds = allNurses
-        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)))
+        .filter(
+          (n) =>
+            n.facility === win.facility &&
+            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)),
+        )
         .map((n) => n.id);
       for (let i = 0; i < globalIds.length; i += 200) {
         await supabase
@@ -392,42 +421,24 @@ function ApprovalsPage() {
 
   async function advance(win: RotaWindow, nextStatus: AssignmentStatus) {
     setBusy(winKey(win));
-    const buildBase = (statusFilter: AssignmentStatus) =>
-      supabase
-        .from("shift_assignments")
-        .update({ status: nextStatus })
-        .gte("shift_date", win.startDate)
-        .lte("shift_date", win.endDate)
-        .neq("status", statusFilter);
-    const buildExact = () =>
-      supabase
-        .from("shift_assignments")
-        .update({ status: nextStatus })
-        .gte("shift_date", win.startDate)
-        .lte("shift_date", win.endDate)
-        .eq("status", win.status);
-    const base = nextStatus === "published" ? buildBase("published") : buildExact();
-    const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
-    if (error) {
+    const err = await (nextStatus === "published"
+      ? scopedStatusUpdate(win, nextStatus, undefined, "published")
+      : scopedStatusUpdate(win, nextStatus, win.status));
+    if (err) {
       setBusy(null);
-      return toast.error(error.message);
+      return toast.error(err);
     }
 
     // When publishing a ward window, also publish the coverage nurses and intern
     // assignments (ward = null) for the same facility so they become available
     // for print and export alongside the ward schedule.
     if (nextStatus === "published" && win.ward !== null) {
-      const winNurseIds = new Set(
-        rows
-          .filter(
-            (r) =>
-              r.shift_date >= win.startDate && r.shift_date <= win.endDate && r.ward === win.ward,
-          )
-          .map((r) => r.nurse_id),
-      );
-      const facility = allNurses.find((n) => winNurseIds.has(n.id))?.facility ?? null;
       const globalIds = allNurses
-        .filter((n) => n.facility === facility && (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)))
+        .filter(
+          (n) =>
+            n.facility === win.facility &&
+            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)),
+        )
         .map((n) => n.id);
       for (let i = 0; i < globalIds.length; i += 200) {
         await supabase
@@ -471,15 +482,9 @@ function ApprovalsPage() {
   async function reject(win: RotaWindow) {
     if (!confirm("Return this rota to draft? The submitter will need to resubmit.")) return;
     setBusy(winKey(win));
-    const base = supabase
-      .from("shift_assignments")
-      .update({ status: "draft" })
-      .gte("shift_date", win.startDate)
-      .lte("shift_date", win.endDate)
-      .eq("status", win.status);
-    const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
+    const err = await scopedStatusUpdate(win, "draft", win.status);
     setBusy(null);
-    if (error) return toast.error(error.message);
+    if (err) return toast.error(err);
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
@@ -499,15 +504,9 @@ function ApprovalsPage() {
     )
       return;
     setBusy(winKey(win));
-    const base = supabase
-      .from("shift_assignments")
-      .update({ status: "draft" })
-      .gte("shift_date", win.startDate)
-      .lte("shift_date", win.endDate)
-      .eq("status", "published");
-    const { error } = await (win.ward !== null ? base.eq("ward", win.ward) : base.is("ward", null));
+    const err = await scopedStatusUpdate(win, "draft", "published");
     setBusy(null);
-    if (error) return toast.error(error.message);
+    if (err) return toast.error(err);
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
@@ -519,16 +518,19 @@ function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  async function fetchWindowData(win: RotaWindow, facility = "", scope = "") {
+  async function fetchWindowData(win: RotaWindow) {
     const endDate = scheduleEndDate(win.startDate);
     type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null };
-    let scopedNurses: NurseRow[] = allNurses as NurseRow[];
-    if (facility) scopedNurses = scopedNurses.filter((n) => n.facility === facility);
-    if (scope === "__HEAD__") {
-      scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role));
-    } else if (scope) {
+    let scopedNurses: NurseRow[] = (allNurses as NurseRow[]).filter(
+      (n) => n.facility === win.facility,
+    );
+    if (win.ward !== null) {
       scopedNurses = scopedNurses.filter(
-        (n) => !isGlobalHead(n.role) && parseWards(n.ward)[0] === scope,
+        (n) => !isGlobalHead(n.role) && parseWards(n.ward).includes(win.ward!),
+      );
+    } else {
+      scopedNurses = scopedNurses.filter(
+        (n) => isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role),
       );
     }
     const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
@@ -556,19 +558,20 @@ function ApprovalsPage() {
 
   async function handleDownloadExcel(win: RotaWindow) {
     const key = winKey(win);
-    const scope = win.ward !== null ? win.ward : "__HEAD__";
-    const facility = win.ward !== null ? "" : (exportFacility[key] ?? "");
     setDownloading(key + "-xlsx");
     try {
       const [XLSX, { activeNurses, assignMap }] = await Promise.all([
         import("xlsx"),
-        fetchWindowData(win, facility, scope),
+        fetchWindowData(win),
       ]);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
-      const facilityLabel = facility ? ` · ${facility}` : "";
-      const scopeLabel = scope === "__HEAD__" ? " — Matron / Coverage Nurses / Nurse Intern" : scope ? ` — ${scope}` : "";
-      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${scopeLabel}`;
+      const facilityLabel = win.facility ? ` · ${win.facility}` : "";
+      const wardLabel =
+        win.ward === null
+          ? " — Matron / Coverage Nurses / Nurse Intern"
+          : ` — ${win.ward}`;
+      const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
         "Nurse",
         "Role",
@@ -588,13 +591,11 @@ function ApprovalsPage() {
       const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
       ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
       XLSX.utils.book_append_sheet(wb, ws, "Rota");
-      const facilitySlug = facility ? `-${facility.replace(/\s+/g, "-").toLowerCase()}` : "";
+      const facilitySlug = win.facility ? `-${win.facility.replace(/\s+/g, "-").toLowerCase()}` : "";
       const fileSuffix =
-        scope === "__HEAD__"
+        win.ward === null
           ? "-coverage-nurses"
-          : scope
-            ? `-${scope.replace(/\s+/g, "-").toLowerCase()}`
-            : "";
+          : `-${win.ward.replace(/\s+/g, "-").toLowerCase()}`;
       XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}${facilitySlug}${fileSuffix}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
@@ -605,11 +606,9 @@ function ApprovalsPage() {
 
   async function handleDownloadPdf(win: RotaWindow) {
     const key = winKey(win);
-    const scope = win.ward !== null ? win.ward : "__HEAD__";
-    const facility = win.ward !== null ? "" : (exportFacility[key] ?? "");
     setDownloading(key + "-pdf");
     try {
-      const { activeNurses, assignMap } = await fetchWindowData(win, facility, scope);
+      const { activeNurses, assignMap } = await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
       const shiftBg: Record<string, string> = {
@@ -635,13 +634,15 @@ function ApprovalsPage() {
           return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
         })
         .join("");
-      const pdfFacilityLabel = facility ? ` · ${facility}` : "";
-      const pdfScopeLabel =
-        scope === "__HEAD__" ? " — Matron / Coverage Nurses / Nurse Intern" : scope ? ` — ${scope}` : "";
+      const pdfFacilityLabel = win.facility ? ` · ${win.facility}` : "";
+      const pdfWardLabel =
+        win.ward === null
+          ? " — Matron / Coverage Nurses / Nurse Intern"
+          : ` — ${win.ward}`;
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${endDate}${pdfFacilityLabel}${pdfScopeLabel}</title>
+<title>Nurse Rota ${win.startDate} — ${endDate}${pdfFacilityLabel}${pdfWardLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
@@ -656,7 +657,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 .lb{display:inline-block;width:10px;height:10px;border:1px solid #aaa;margin-right:2px;vertical-align:middle}
 @media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
-<h1>Nurse Rota${pdfFacilityLabel}${pdfScopeLabel}</h1>
+<h1>Nurse Rota${pdfFacilityLabel}${pdfWardLabel}</h1>
 <p>${fmtDate(win.startDate)} — ${fmtDate(endDate)} &nbsp;·&nbsp; ${activeNurses.length} staff</p>
 <table>
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
@@ -695,9 +696,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
         : STEPS.findIndex((s) => s.status === win.status);
 
     const meta = windowMeta.get(key);
-    const winFacilities = meta?.winFacilities ?? [];
     const extraStaff = meta?.extraStaff ?? [];
-    const currentFacility = exportFacility[key] ?? "";
 
     let canApprove = false;
     let nextStatus: AssignmentStatus = "draft";
@@ -734,13 +733,13 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {/* Header */}
         <div className="px-4 py-3.5 border-b flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Matron / Coverage Nurses / Nurse Intern"}</p>
+            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Matron / Coverage / Interns"}</p>
+            {win.facility && (
+              <p className="text-xs font-medium text-primary/80 mt-0.5">{win.facility}</p>
+            )}
             <p className="text-xs font-medium text-foreground/70 mt-0.5">
               {fmtDate(win.startDate)} — {fmtDate(scheduleEndDate(win.startDate))}
             </p>
-            {win.ward === null && winFacilities.length > 0 && (
-              <p className="text-xs text-muted-foreground mt-0.5">{winFacilities.join(" · ")}</p>
-            )}
             <p className="text-xs text-muted-foreground mt-0.5">
               {win.nurseCount} nurses · {win.assignmentCount} assignments
             </p>
@@ -868,25 +867,6 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   </button>
                 )}
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {win.ward === null && winFacilities.length > 1 && (
-                    <label className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted-foreground font-medium">Facility:</span>
-                      <select
-                        value={currentFacility}
-                        onChange={(e) =>
-                          setExportFacility((prev) => ({ ...prev, [key]: e.target.value }))
-                        }
-                        className="h-8 px-2 rounded-md border bg-card text-xs outline-none focus:ring-2 focus:ring-ring"
-                      >
-                        <option value="">All</option>
-                        {winFacilities.map((f) => (
-                          <option key={f} value={f}>
-                            {f}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
                   <button
                     type="button"
                     disabled={!!isDownloadingCard}

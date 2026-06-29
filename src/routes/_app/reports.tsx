@@ -89,6 +89,7 @@ type ArchiveWindow = {
   startDate: string;
   endDate: string;
   ward: string | null;
+  facility: string | null;
   nurseCount: number;
   assignmentCount: number;
 };
@@ -129,18 +130,24 @@ function scheduleEndDate(startDate: string): string {
 
 // ── Archive grouping (mirrors approvals.tsx groupIntoWindows) ────────────────
 
-function groupArchiveWindows(rows: ArchiveAssignment[]): ArchiveWindow[] {
+function groupArchiveWindows(
+  rows: ArchiveAssignment[],
+  nurseToFacility: Map<string, string | null>,
+): ArchiveWindow[] {
   if (!rows.length) return [];
-  const byWard = new Map<string, ArchiveAssignment[]>();
+  const byKey = new Map<string, ArchiveAssignment[]>();
   for (const row of rows) {
-    const key = row.ward ?? "__NONE__";
-    if (!byWard.has(key)) byWard.set(key, []);
-    byWard.get(key)!.push(row);
+    const fac = nurseToFacility.get(row.nurse_id) ?? null;
+    const key = `${fac ?? "__NONE__"}||${row.ward ?? "__NONE__"}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push(row);
   }
   const windows: ArchiveWindow[] = [];
-  for (const [wardKey, wardRows] of byWard) {
-    const ward = wardKey === "__NONE__" ? null : wardKey;
-    const sorted = [...wardRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
+  for (const [key, keyRows] of byKey) {
+    const [facPart, wardPart] = key.split("||");
+    const facility = facPart === "__NONE__" ? null : facPart;
+    const ward = wardPart === "__NONE__" ? null : wardPart;
+    const sorted = [...keyRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
     let cluster: ArchiveAssignment[] = [sorted[0]];
     for (let i = 1; i < sorted.length; i++) {
       const prev = cluster[cluster.length - 1];
@@ -148,24 +155,32 @@ function groupArchiveWindows(rows: ArchiveAssignment[]): ArchiveWindow[] {
         (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
       );
       if (diff > 14) {
-        windows.push(makeArchiveWindow(cluster, ward));
+        windows.push(makeArchiveWindow(cluster, ward, facility));
         cluster = [];
       }
       cluster.push(sorted[i]);
     }
-    if (cluster.length) windows.push(makeArchiveWindow(cluster, ward));
+    if (cluster.length) windows.push(makeArchiveWindow(cluster, ward, facility));
   }
   return windows.sort(
-    (a, b) => b.startDate.localeCompare(a.startDate) || (a.ward ?? "").localeCompare(b.ward ?? ""),
+    (a, b) =>
+      b.startDate.localeCompare(a.startDate) ||
+      (a.facility ?? "").localeCompare(b.facility ?? "") ||
+      (a.ward ?? "").localeCompare(b.ward ?? ""),
   );
 }
 
-function makeArchiveWindow(rows: ArchiveAssignment[], ward: string | null): ArchiveWindow {
+function makeArchiveWindow(
+  rows: ArchiveAssignment[],
+  ward: string | null,
+  facility: string | null,
+): ArchiveWindow {
   const dates = rows.map((r) => r.shift_date).sort();
   return {
     startDate: dates[0],
     endDate: dates[dates.length - 1],
     ward,
+    facility,
     nurseCount: new Set(rows.map((r) => r.nurse_id)).size,
     assignmentCount: rows.length,
   };
@@ -318,18 +333,26 @@ function ReportsPage() {
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [facilityNurses]);
 
-  // Archive: group published assignments into windows, filter by facility if selected
-  const archiveWindows = useMemo(() => {
-    if (!archiveAssignments.length) return [];
-    let filtered = archiveAssignments;
-    if (archiveFacility) {
-      const facilityNurseIds = new Set(
-        nurses.filter((n) => n.facility === archiveFacility).map((n) => n.id),
-      );
-      filtered = filtered.filter((a) => facilityNurseIds.has(a.nurse_id));
-    }
-    return groupArchiveWindows(filtered);
-  }, [archiveAssignments, archiveFacility, nurses]);
+  // nurse_id → facility lookup for archive grouping
+  const archiveNurseToFacility = useMemo(
+    () => new Map(nurses.map((n) => [n.id, n.facility])),
+    [nurses],
+  );
+
+  // Archive: group published assignments into facility+ward windows
+  const allArchiveWindows = useMemo(
+    () => groupArchiveWindows(archiveAssignments, archiveNurseToFacility),
+    [archiveAssignments, archiveNurseToFacility],
+  );
+
+  // Filter archive windows by selected facility tab
+  const archiveWindows = useMemo(
+    () =>
+      archiveFacility
+        ? allArchiveWindows.filter((w) => w.facility === archiveFacility)
+        : allArchiveWindows,
+    [allArchiveWindows, archiveFacility],
+  );
 
   // Group archive windows by period start date
   const archiveByPeriod = useMemo(() => {
@@ -342,17 +365,21 @@ function ReportsPage() {
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [archiveWindows]);
 
-  // Precompute roles per archive window key (startDate|ward)
+  // Precompute roles per archive window key (startDate|facility|ward)
   const archiveWindowRoles = useMemo(() => {
     const nurseRoleMap = new Map(nurses.map((n) => [n.id, n.role]));
+    const facilityNurseIds = new Map(nurses.map((n) => [n.id, n.facility]));
     const result = new Map<string, string[]>();
-    for (const win of archiveWindows) {
-      const key = `${win.startDate}|${win.ward ?? ""}`;
+    for (const win of allArchiveWindows) {
+      const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
       const nurseIds = new Set(
         archiveAssignments
           .filter(
             (a) =>
-              a.shift_date >= win.startDate && a.shift_date <= win.endDate && a.ward === win.ward,
+              a.shift_date >= win.startDate &&
+              a.shift_date <= win.endDate &&
+              a.ward === win.ward &&
+              facilityNurseIds.get(a.nurse_id) === win.facility,
           )
           .map((a) => a.nurse_id),
       );
@@ -362,7 +389,7 @@ function ReportsPage() {
       result.set(key, roles);
     }
     return result;
-  }, [archiveWindows, archiveAssignments, nurses]);
+  }, [allArchiveWindows, archiveAssignments, nurses]);
 
   // ── Close Period ──────────────────────────────────────────────────────────
   async function closePeriod() {
@@ -563,16 +590,26 @@ ${staffToPrint
 
   // ── Schedule archive download ─────────────────────────────────────────────
   async function fetchScheduleData(win: ArchiveWindow) {
+    // Scope to this facility's nurses to prevent cross-facility contamination.
+    const facilityNurseIds = win.facility
+      ? nurses.filter((n) => n.facility === win.facility).map((n) => n.id)
+      : nurses.map((n) => n.id);
+
     const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
-    const query = supabase
-      .from("shift_assignments")
-      .select("nurse_id, shift_date, shift")
-      .gte("shift_date", win.startDate)
-      .lte("shift_date", win.endDate)
-      .eq("status", "published");
-    const { data } =
-      win.ward !== null ? await query.eq("ward", win.ward) : await query.is("ward", null);
-    if (data) allAssignments.push(...(data as typeof allAssignments));
+    const BATCH = 50;
+    for (let i = 0; i < facilityNurseIds.length; i += BATCH) {
+      let q = supabase
+        .from("shift_assignments")
+        .select("nurse_id, shift_date, shift")
+        .gte("shift_date", win.startDate)
+        .lte("shift_date", win.endDate)
+        .eq("status", "published")
+        .in("nurse_id", facilityNurseIds.slice(i, i + BATCH));
+      if (win.ward !== null) q = q.eq("ward", win.ward);
+      else q = q.is("ward", null);
+      const { data } = await q;
+      if (data) allAssignments.push(...(data as typeof allAssignments));
+    }
     const assignMap = new Map(
       allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date}`, a.shift]),
     );
@@ -582,13 +619,13 @@ ${staffToPrint
   }
 
   async function downloadSchedulePdf(win: ArchiveWindow) {
-    const key = `${win.startDate}|${win.ward ?? ""}`;
+    const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
     setArchiveDownloading(key + "-pdf");
     try {
       const { activeNurses, assignMap } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage Nurses / Nurse Intern";
-      const facilityLabel = archiveFacility ? ` · ${archiveFacility}` : "";
+      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns";
+      const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const shiftBg: Record<string, string> = {
         M: "#fef3c7",
         N: "#e0e7ff",
@@ -653,13 +690,13 @@ td.sm{text-align:left;color:#444;min-width:55px}
   }
 
   async function downloadScheduleExcel(win: ArchiveWindow) {
-    const key = `${win.startDate}|${win.ward ?? ""}`;
+    const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
     setArchiveDownloading(key + "-xlsx");
     try {
       const { activeNurses, assignMap } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage Nurses / Nurse Intern";
-      const facilityLabel = archiveFacility ? ` · ${archiveFacility}` : "";
+      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns";
+      const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
         "Nurse",
@@ -1235,7 +1272,10 @@ td.sm{text-align:left;color:#444;min-width:55px}
                 const allPeriodRoles = [
                   ...new Set(
                     periodWins.flatMap(
-                      (w) => archiveWindowRoles.get(`${w.startDate}|${w.ward ?? ""}`) ?? [],
+                      (w) =>
+                        archiveWindowRoles.get(
+                          `${w.startDate}|${w.facility ?? ""}|${w.ward ?? ""}`,
+                        ) ?? [],
                     ),
                   ),
                 ].sort();
@@ -1264,7 +1304,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     {/* Ward cards */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                       {periodWins.map((win) => {
-                        const key = `${win.startDate}|${win.ward ?? ""}`;
+                        const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
                         const isDownloading = archiveDownloading?.startsWith(key);
                         const winRoles = archiveWindowRoles.get(key) ?? [];
                         return (
@@ -1274,8 +1314,13 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           >
                             <div>
                               <p className="text-sm font-semibold">
-                                {win.ward ?? "Matron / Coverage Nurses / Nurse Intern"}
+                                {win.ward ?? "Matron / Coverage / Interns"}
                               </p>
+                              {win.facility && (
+                                <p className="text-xs font-medium text-primary/80 mt-0.5">
+                                  {win.facility}
+                                </p>
+                              )}
                               <p className="text-xs text-muted-foreground mt-0.5">
                                 {win.nurseCount} nurses · {win.assignmentCount} assignments
                               </p>
@@ -1293,7 +1338,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                                 className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
                               >
                                 <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                                {archiveDownloading === key + "-xlsx" ? "…" : "Excel"}
+                                {archiveDownloading === `${key}-xlsx` ? "…" : "Excel"}
                               </button>
                               <button
                                 type="button"
@@ -1302,7 +1347,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                                 className="flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
                               >
                                 <FileDown className="h-3.5 w-3.5 text-red-500" />
-                                {archiveDownloading === key + "-pdf" ? "…" : "PDF"}
+                                {archiveDownloading === `${key}-pdf` ? "…" : "PDF"}
                               </button>
                             </div>
                           </div>
