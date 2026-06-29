@@ -20,6 +20,7 @@ import { Route as AppRotaRouteImport } from './routes/_app/rota'
 import { Route as AppReportsRouteImport } from './routes/_app/reports'
 import { Route as AppPermissionsRouteImport } from './routes/_app/permissions'
 import { Route as AppMenuPermissionsRouteImport } from './routes/_app/menu-permissions'
+import { Route as AppLocumRouteImport } from './routes/_app/locum'
 import { Route as AppLeaveRouteImport } from './routes/_app/leave'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppApprovalsRouteImport } from './routes/_app/approvals'
@@ -78,6 +79,11 @@ const AppMenuPermissionsRoute = AppMenuPermissionsRouteImport.update({
   path: '/menu-permissions',
   getParentRoute: () => AppRoute,
 } as any)
+const AppLocumRoute = AppLocumRouteImport.update({
+  id: '/locum',
+  path: '/locum',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppLeaveRoute = AppLeaveRouteImport.update({
   id: '/leave',
   path: '/leave',
@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/approvals': typeof AppApprovalsRoute
   '/audit': typeof AppAuditRoute
   '/leave': typeof AppLeaveRoute
+  '/locum': typeof AppLocumRoute
   '/menu-permissions': typeof AppMenuPermissionsRoute
   '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
@@ -114,6 +121,7 @@ export interface FileRoutesByTo {
   '/approvals': typeof AppApprovalsRoute
   '/audit': typeof AppAuditRoute
   '/leave': typeof AppLeaveRoute
+  '/locum': typeof AppLocumRoute
   '/menu-permissions': typeof AppMenuPermissionsRoute
   '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
@@ -131,6 +139,7 @@ export interface FileRoutesById {
   '/_app/approvals': typeof AppApprovalsRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/leave': typeof AppLeaveRoute
+  '/_app/locum': typeof AppLocumRoute
   '/_app/menu-permissions': typeof AppMenuPermissionsRoute
   '/_app/permissions': typeof AppPermissionsRoute
   '/_app/reports': typeof AppReportsRoute
@@ -149,6 +158,7 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/audit'
     | '/leave'
+    | '/locum'
     | '/menu-permissions'
     | '/permissions'
     | '/reports'
@@ -163,6 +173,7 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/audit'
     | '/leave'
+    | '/locum'
     | '/menu-permissions'
     | '/permissions'
     | '/reports'
@@ -179,6 +190,7 @@ export interface FileRouteTypes {
     | '/_app/approvals'
     | '/_app/audit'
     | '/_app/leave'
+    | '/_app/locum'
     | '/_app/menu-permissions'
     | '/_app/permissions'
     | '/_app/reports'
@@ -281,6 +293,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppLeaveRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/locum': {
+      id: '/_app/locum'
+      path: '/locum'
+      fullPath: '/locum'
+      preLoaderRoute: typeof AppLocumRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/audit': {
       id: '/_app/audit'
       path: '/audit'
@@ -302,6 +321,7 @@ interface AppRouteChildren {
   AppApprovalsRoute: typeof AppApprovalsRoute
   AppAuditRoute: typeof AppAuditRoute
   AppLeaveRoute: typeof AppLeaveRoute
+  AppLocumRoute: typeof AppLocumRoute
   AppMenuPermissionsRoute: typeof AppMenuPermissionsRoute
   AppPermissionsRoute: typeof AppPermissionsRoute
   AppReportsRoute: typeof AppReportsRoute
@@ -317,6 +337,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppApprovalsRoute: AppApprovalsRoute,
   AppAuditRoute: AppAuditRoute,
   AppLeaveRoute: AppLeaveRoute,
+  AppLocumRoute: AppLocumRoute,
   AppMenuPermissionsRoute: AppMenuPermissionsRoute,
   AppPermissionsRoute: AppPermissionsRoute,
   AppReportsRoute: AppReportsRoute,

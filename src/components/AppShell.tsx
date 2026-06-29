@@ -25,6 +25,7 @@ import {
   AlertCircle,
   Info,
   CheckCircle2,
+  Stethoscope,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ const nav = [
   { to: "/wards", label: "Wards", icon: Building2, roles: MANAGERS },
   { to: "/leave", label: "Leave & Requests", icon: PlaneTakeoff, roles: ALL },
   { to: "/approvals", label: "Approvals", icon: FileCheck2, roles: APPROVERS },
+  { to: "/locum", label: "Bank Shift (Locum)", icon: Stethoscope, roles: ALL },
   {
     to: "/reports",
     label: "Reports",
@@ -469,17 +471,71 @@ function RotaReminderBell({
   const staffKey = nurseId && staffNotif ? `staff_notif_v2_${nurseId}_${staffNotif.periodStart}` : null;
   const [staffState, staffMarkRead, staffMarkUnread] = useNotifState(staffKey, userId);
 
+  // ── Locum: pending-action counts ─────────────────────────────────────────
+  const { data: locumCount = 0 } = useQuery({
+    queryKey: ["locum-bell", userId, activeRole, nurseId],
+    enabled: !!userId,
+    staleTime: 60 * 1000,
+    queryFn: async () => {
+      let total = 0;
+
+      // Nurse: pending invites
+      if (nurseId) {
+        const { count } = await supabase
+          .from("locum_invites")
+          .select("id", { count: "exact", head: true })
+          .eq("nurse_id", nurseId)
+          .eq("status", "pending");
+        total += count ?? 0;
+      }
+
+      // CNO / admin: pending review requests
+      if (activeRole === "cno" || activeRole === "admin") {
+        const { count } = await supabase
+          .from("locum_requests")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending");
+        total += count ?? 0;
+      }
+
+      // Chief Matron / admin: approved requests awaiting invite send
+      if ((activeRole === "chief_matron" || activeRole === "admin") && userId) {
+        const { count } = await supabase
+          .from("locum_requests")
+          .select("id", { count: "exact", head: true })
+          .eq("requested_by", userId)
+          .eq("status", "approved");
+        total += count ?? 0;
+      }
+
+      // All roles: unread filled/declined locum notifications
+      if (userId) {
+        const { data: unread } = await supabase
+          .from("notification_state")
+          .select("notif_key")
+          .eq("user_id", userId)
+          .eq("is_read", false)
+          .or("notif_key.like.locum_filled_%,notif_key.like.locum_declined_%");
+        total += unread?.length ?? 0;
+      }
+
+      return total;
+    },
+  });
+
   // ── Computed alert counts ─────────────────────────────────────────────────
   const showMgmt = canSeeManagement && !!mgmtNotif && !mgmtNotif.nextRotaExists;
   const showStaff = !!nurseId && !!staffNotif;
+  const showLocum = locumCount > 0;
 
   // Only count as unread once the DB has responded (state !== null)
   const mgmtUnread = showMgmt && mgmtState === "unread";
   const staffUnread = showStaff && staffState === "unread";
-  const unreadCount = (mgmtUnread ? 1 : 0) + (staffUnread ? 1 : 0);
+  const unreadCount = (mgmtUnread ? 1 : 0) + (staffUnread ? 1 : 0) + (showLocum ? 1 : 0);
 
   // Build ordered notifications list — newest/most urgent first
   const allNotifItems = [
+    ...(showLocum ? [{ kind: "locum" as const }] : []),
     ...(showStaff && staffNotif ? [{ kind: "staff" as const }] : []),
     ...(showMgmt && mgmtNotif ? [{ kind: "mgmt" as const }] : []),
   ];
@@ -544,7 +600,24 @@ function RotaReminderBell({
             ) : (
               <div className="space-y-3">
                 {notifItems.map(({ kind }) =>
-                  kind === "staff" && staffNotif ? (
+                  kind === "locum" ? (
+                    <div
+                      key="locum"
+                      className="rounded-lg border border-violet-400/40 bg-violet-50 dark:bg-violet-950/20 p-3 space-y-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Stethoscope className="h-4 w-4 shrink-0 text-violet-600" />
+                        <p className="text-xs font-semibold text-violet-700">Bank Shift (Locum)</p>
+                        <span className="h-1.5 w-1.5 rounded-full bg-violet-500 shrink-0" />
+                      </div>
+                      <p className="text-xs">
+                        {locumCount} locum item{locumCount !== 1 ? "s" : ""} need{locumCount === 1 ? "s" : ""} your attention.
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Open the Bank Shift (Locum) page to view and respond.
+                      </p>
+                    </div>
+                  ) : kind === "staff" && staffNotif ? (
                     <div
                       key="staff"
                       className={cn(

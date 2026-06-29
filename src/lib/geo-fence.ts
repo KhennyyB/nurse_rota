@@ -10,8 +10,8 @@ export const FACILITY_LOCATIONS: Record<string, { lat: number; lng: number; labe
   Ligali: [{ lat: 6.428565, lng: 3.44097, label: "Ligali — 3B Ligali Ayorinde Street" }],
 };
 
-// Nurses must be within this distance of any campus gate to clock in.
-export const GEO_FENCE_RADIUS_M = 200000;
+// Nurses must be within this distance of any facility to clock in.
+export const GEO_FENCE_RADIUS_M = 50000;
 
 function haversineMetres(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6_371_000;
