@@ -32,6 +32,9 @@ export const Route = createFileRoute("/_app/locum")({
   component: LocumPage,
 });
 
+// Wards eligible for locum across all facilities
+const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & Cathlab"];
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type LocumStatus = "pending" | "approved" | "declined" | "invites_sent" | "filled";
@@ -526,6 +529,15 @@ function LocumPage() {
         }
       />
 
+      <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">Eligible wards:</span>
+        {LOCUM_WARDS.map((w) => (
+          <span key={w} className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium">
+            {w}
+          </span>
+        ))}
+      </div>
+
       {tabs.length > 1 && (
         <div className="flex gap-1 border-b">
           {tabs.map((t) => (
@@ -581,7 +593,11 @@ function LocumPage() {
 
       {/* Dialogs */}
       {showCreate && (
-        <CreateRequestModal wards={wards} onClose={() => setShowCreate(false)} onSubmit={handleCreate} />
+        <CreateRequestModal
+          wards={wards.filter((w) => LOCUM_WARDS.includes(w.name))}
+          onClose={() => setShowCreate(false)}
+          onSubmit={handleCreate}
+        />
       )}
       {reviewReq && reviewAction && (
         <ReviewModal
@@ -944,25 +960,30 @@ function CreateRequestModal({
     hdu_nurses: number;
   }) => Promise<void>;
 }) {
+  // Derive unique facility list from the filtered wards prop
+  const facilities = [...new Set(wards.map((w) => w.facility).filter(Boolean))] as string[];
+
   const [busy, setBusy] = useState(false);
   const [shiftDate, setShiftDate] = useState(todayYmd());
   const [shift, setShift] = useState<"M" | "N">("M");
-  const [ward, setWard] = useState(wards[0]?.name ?? "");
-  const [facility, setFacility] = useState(wards[0]?.facility ?? "");
+  const [facility, setFacility] = useState(facilities[0] ?? "");
+  const [ward, setWard] = useState("");
   const [nursesInWard, setNursesInWard] = useState("");
   const [ventPatients, setVentPatients] = useState("");
   const [hduNurses, setHduNurses] = useState("");
 
-  // Auto-fill facility when ward changes
-  function handleWardChange(wardName: string) {
-    setWard(wardName);
-    const match = wards.find((w) => w.name === wardName);
-    if (match?.facility) setFacility(match.facility);
+  // Wards available for the selected facility
+  const facilityWards = wards.filter((w) => w.facility === facility);
+
+  function handleFacilityChange(f: string) {
+    setFacility(f);
+    setWard(""); // reset ward whenever facility changes
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!shiftDate || !ward || !facility) return toast.error("Please fill in all required fields.");
+    if (!shiftDate || !facility) return toast.error("Please select a facility.");
+    if (!ward) return toast.error("Please select a ward.");
     if (!nursesInWard || !ventPatients || !hduNurses) return toast.error("Please answer all assessment questions.");
     setBusy(true);
     try {
@@ -1004,17 +1025,28 @@ function CreateRequestModal({
           </Field>
         </div>
 
-        <Field label="Ward *">
-          <select className={inp} value={ward} onChange={(e) => handleWardChange(e.target.value)} required>
-            <option value="">Select ward…</option>
-            {wards.map((w) => (
-              <option key={w.name} value={w.name}>{w.name}</option>
+        <Field label="Facility *">
+          <select className={inp} value={facility} onChange={(e) => handleFacilityChange(e.target.value)} required>
+            <option value="">Select facility…</option>
+            {facilities.map((f) => (
+              <option key={f} value={f}>{f}</option>
             ))}
           </select>
         </Field>
 
-        <Field label="Facility *">
-          <input className={inp} value={facility} readOnly placeholder="Auto-filled from ward" />
+        <Field label="Ward *">
+          <select
+            className={inp}
+            value={ward}
+            onChange={(e) => setWard(e.target.value)}
+            required
+            disabled={!facility}
+          >
+            <option value="">{facility ? "Select ward…" : "Select a facility first"}</option>
+            {facilityWards.map((w) => (
+              <option key={w.name} value={w.name}>{w.name}</option>
+            ))}
+          </select>
         </Field>
 
         <hr />

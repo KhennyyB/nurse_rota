@@ -1345,20 +1345,25 @@ function RotaPage() {
                   </th>
                   <th className="text-left font-semibold px-2 py-3 min-w-24">Ward</th>
                   <th className="text-center font-semibold px-2 py-3 min-w-14">Hrs</th>
-                  {days.map((dt) => (
-                    <th
-                      key={ymd(dt)}
-                      className={cn(
-                        "text-center font-semibold px-1 py-3 min-w-11",
-                        (dt.getDay() === 0 || dt.getDay() === 6) && "bg-muted",
-                      )}
-                    >
-                      <div>{dt.toLocaleDateString("en", { weekday: "short" })}</div>
-                      <div className="text-[10px] font-normal text-muted-foreground">
-                        {dt.getDate()}/{dt.getMonth() + 1}
-                      </div>
-                    </th>
-                  ))}
+                  {days.map((dt) => {
+                    const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                    return (
+                      <th
+                        key={ymd(dt)}
+                        className={cn(
+                          "text-center font-semibold px-1 py-3 min-w-11",
+                          isWeekend
+                            ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400"
+                            : "",
+                        )}
+                      >
+                        <div>{dt.toLocaleDateString("en", { weekday: "short" })}</div>
+                        <div className={cn("text-[10px] font-normal", isWeekend ? "text-red-400" : "text-muted-foreground")}>
+                          {dt.getDate()}/{dt.getMonth() + 1}
+                        </div>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -1397,6 +1402,7 @@ function RotaPage() {
                     </td>
                     {days.map((dt) => {
                       const dateStr = ymd(dt);
+                      const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
                       const cell = cellMap.get(`${n.id}|${dateStr}`);
                       // Visual-only: uses state (safe to lag one render behind)
                       const isDragOver =
@@ -1405,7 +1411,13 @@ function RotaPage() {
                         cell &&
                         dragging.id !== cell.id;
                       return (
-                        <td key={dateStr} className="px-0.5 py-1 text-center">
+                        <td
+                          key={dateStr}
+                          className={cn(
+                            "px-0.5 py-1 text-center",
+                            isWeekend && "bg-red-50/60 dark:bg-red-950/10",
+                          )}
+                        >
                           <button
                             type="button"
                             draggable={!!cell && canEdit && !isWindowLocked}
