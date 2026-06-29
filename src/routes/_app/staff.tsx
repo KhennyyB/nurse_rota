@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useRef, useState, useMemo, type FormEvent } from "react";
+import { useEffect, useRef, useState, useMemo, type FormEvent } from "react";
 import {
   UserPlus,
   Search,
@@ -1233,6 +1233,20 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
   const [role, setRole] = useState("nurse");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Fetch the nurse's current email fresh from the DB on open — the parent
+  // list may be serving a cached (stale) row where email is still null.
+  useEffect(() => {
+    if (nurse.email) return; // already have it from cache
+    supabase
+      .from("nurses")
+      .select("email")
+      .eq("id", nurse.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.email) setEmail(data.email);
+      });
+  }, [nurse.id, nurse.email]);
 
   function copyPassword() {
     void navigator.clipboard.writeText(password).then(() => {
