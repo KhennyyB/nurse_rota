@@ -32,6 +32,16 @@ export const Route = createFileRoute("/_app/reports")({
 
 const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
+// Display decimal hours as plain English — e.g. 0.2333 → "0 hours 14 minutes", 1.5 → "1 hour 30 minutes".
+function fmtHoursLog(decHours: number): string {
+  const h = Math.floor(decHours);
+  const m = Math.round((decHours - h) * 60);
+  const hStr = `${h} ${h === 1 ? "hour" : "hours"}`;
+  if (m === 0) return hStr;
+  const mStr = `${m} ${m === 1 ? "minute" : "minutes"}`;
+  return `${hStr} ${mStr}`;
+}
+
 type Nurse = {
   id: string;
   name: string;
@@ -59,6 +69,15 @@ type PeriodHours = {
   period_end: string;
   total_hours: number;
   total_shifts: number;
+};
+type LeaveRequest = {
+  id: string;
+  nurse_id: string | null;
+  from_date: string;
+  to_date: string;
+  status: "Pending" | "Approved" | "Rejected";
+  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap";
+  reason: string | null;
 };
 type ArchiveAssignment = {
   nurse_id: string;
@@ -180,18 +199,27 @@ function ReportsPage() {
     queryKey: ["nurses"],
     staleTime: 10 * 60 * 1000,
     queryFn: async () =>
-      (await supabase.from("nurses").select("id, name, role, facility, ward, target_hours, hours_this_month")).data ?? [],
+      (
+        await supabase
+          .from("nurses")
+          .select("id, name, role, facility, ward, target_hours, hours_this_month")
+      ).data ?? [],
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
     staleTime: 30 * 60 * 1000,
-    queryFn: async () => (await supabase.from("wards").select("id, name, facility").order("name")).data ?? [],
+    queryFn: async () =>
+      (await supabase.from("wards").select("id, name, facility").order("name")).data ?? [],
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
     staleTime: 5 * 60 * 1000,
     queryFn: async () =>
-      (await supabase.from("leave_requests").select("id, nurse_id, from_date, to_date, status, type, reason")).data ?? [],
+      (
+        await supabase
+          .from("leave_requests")
+          .select("id, nurse_id, from_date, to_date, status, type, reason")
+      ).data ?? [],
   });
 
   // Current period shift logs (last 28 days)
@@ -850,9 +878,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           )}
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums font-medium">
-                          {log.hours_logged != null
-                            ? `${Number(log.hours_logged).toFixed(2)}h`
-                            : "—"}
+                          {log.hours_logged != null ? fmtHoursLog(Number(log.hours_logged)) : "—"}
                         </td>
                       </tr>
                     );
@@ -928,37 +954,30 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      {(
-                        switches as Array<{
-                          id: string;
-                          nurse_name: string;
-                          from_date: string;
-                          status: string;
-                        }>
-                      )
-                        .slice(0, 6)
-                        .map((s) => (
-                          <div
-                            key={s.id}
-                            className="flex items-center justify-between text-sm border rounded-lg px-3 py-2"
-                          >
-                            <div>
-                              <p className="font-medium">{s.nurse_name}</p>
-                              <p className="text-xs text-muted-foreground">{s.from_date}</p>
-                            </div>
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                                s.status === "Approved"
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : s.status === "Rejected"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : "bg-amber-100 text-amber-700"
-                              }`}
-                            >
-                              {s.status}
-                            </span>
+                      {switches.slice(0, 6).map((s) => (
+                        <div
+                          key={s.id}
+                          className="flex items-center justify-between text-sm border rounded-lg px-3 py-2"
+                        >
+                          <div>
+                            <p className="font-medium">
+                              {nurses.find((n) => n.id === s.nurse_id)?.name ?? "Unknown"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">{s.from_date}</p>
                           </div>
-                        ))}
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                              s.status === "Approved"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : s.status === "Rejected"
+                                  ? "bg-rose-100 text-rose-700"
+                                  : "bg-amber-100 text-amber-700"
+                            }`}
+                          >
+                            {s.status}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -976,18 +995,11 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     </tr>
                   </thead>
                   <tbody>
-                    {(
-                      leaveOnly as Array<{
-                        id: string;
-                        nurse_name: string;
-                        type: string;
-                        from_date: string;
-                        to_date: string;
-                        status: string;
-                      }>
-                    ).map((l) => (
+                    {leaveOnly.map((l) => (
                       <tr key={l.id} className="border-t hover:bg-muted/30">
-                        <td className="px-4 py-3 font-medium">{l.nurse_name}</td>
+                        <td className="px-4 py-3 font-medium">
+                          {nurses.find((n) => n.id === l.nurse_id)?.name ?? "Unknown"}
+                        </td>
                         <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
                         <td className="px-4 py-3 tabular-nums text-muted-foreground">
                           {l.from_date}
@@ -1058,7 +1070,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums">{p.total_shifts}</td>
                         <td className="px-4 py-3 text-right tabular-nums font-semibold">
-                          {Number(p.total_hours).toFixed(2)}h
+                          {fmtHoursLog(Number(p.total_hours))}
                         </td>
                       </tr>
                     );

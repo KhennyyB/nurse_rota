@@ -303,13 +303,14 @@ type NotifState = "unread" | "read";
 function useNotifState(
   notifKey: string | null,
   userId: string | null,
-): [NotifState, () => void, () => void] {
-  const [state, setState] = useState<NotifState>("unread");
+): [NotifState | null, () => void, () => void] {
+  // null = not yet loaded from DB (avoid showing badge before we know the real state)
+  const [state, setState] = useState<NotifState | null>(null);
 
   // Load initial state from DB
   useEffect(() => {
     if (!notifKey || !userId) {
-      setState("unread");
+      setState(null);
       return;
     }
     supabase
@@ -340,16 +341,25 @@ function useNotifState(
         },
       )
       .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }, [notifKey, userId]);
 
   function upsert(isRead: boolean) {
     if (!notifKey || !userId) return;
+    // Optimistic update so the UI responds immediately
     setState(isRead ? "read" : "unread");
-    void supabase.from("notification_state").upsert(
-      { user_id: userId, notif_key: notifKey, is_read: isRead, updated_at: new Date().toISOString() },
-      { onConflict: "user_id,notif_key" },
-    );
+    void supabase
+      .from("notification_state")
+      .upsert(
+        { user_id: userId, notif_key: notifKey, is_read: isRead, updated_at: new Date().toISOString() },
+        { onConflict: "user_id,notif_key" },
+      )
+      .then(({ error }) => {
+        // Roll back optimistic update on failure so the badge is truthful
+        if (error) setState(isRead ? "unread" : "read");
+      });
   }
 
   return [state, () => upsert(true), () => upsert(false)];
@@ -367,6 +377,7 @@ function RotaReminderBell({
   const canSeeManagement =
     activeRole === "admin" || activeRole === "cno" || activeRole === "chief_matron";
   const [open, setOpen] = useState(false);
+  const [showAllNotifs, setShowAllNotifs] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
   // ── Management: next rota deadline ────────────────────────────────────────
@@ -462,9 +473,18 @@ function RotaReminderBell({
   const showMgmt = canSeeManagement && !!mgmtNotif && !mgmtNotif.nextRotaExists;
   const showStaff = !!nurseId && !!staffNotif;
 
+  // Only count as unread once the DB has responded (state !== null)
   const mgmtUnread = showMgmt && mgmtState === "unread";
   const staffUnread = showStaff && staffState === "unread";
   const unreadCount = (mgmtUnread ? 1 : 0) + (staffUnread ? 1 : 0);
+
+  // Build ordered notifications list — newest/most urgent first
+  const allNotifItems = [
+    ...(showStaff && staffNotif ? [{ kind: "staff" as const }] : []),
+    ...(showMgmt && mgmtNotif ? [{ kind: "mgmt" as const }] : []),
+  ];
+  const notifItems = showAllNotifs ? allNotifItems : allNotifItems.slice(0, 3);
+  const hasMore = !showAllNotifs && allNotifItems.length > 3;
 
   const mgmtOverdue = showMgmt && !!mgmtNotif && today > mgmtNotif.deadline;
   const mgmtUrgent =
@@ -516,141 +536,163 @@ function RotaReminderBell({
               </button>
             </div>
 
-            {!showMgmt && !showStaff ? (
+            {notifItems.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-4 text-center">
                 <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                 <p className="text-sm text-muted-foreground">No notifications.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {/* ── Staff: rota published ── */}
-                {showStaff && staffNotif && (
-                  <div
-                    className={cn(
-                      "rounded-lg border p-3 space-y-2 transition-opacity",
-                      staffState === "read" && "opacity-60",
-                      "border-emerald-400/40 bg-emerald-50 dark:bg-emerald-950/20",
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <Bell className="h-4 w-4 shrink-0 text-emerald-600" />
-                        <p className="text-xs font-semibold text-emerald-700">
-                          Your Rota Is Published
-                        </p>
-                        {staffState === "unread" && (
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        title={staffState === "unread" ? "Mark as read" : "Mark as unread"}
-                        onClick={staffState === "unread" ? staffMarkRead : staffMarkUnread}
-                        className="text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
-                      >
-                        {staffState === "unread" ? "Mark read" : "Mark unread"}
-                      </button>
-                    </div>
-                    <p className="text-xs">
-                      {staffNotif.ward ? (
-                        <>
-                          <span className="font-medium">{staffNotif.ward}</span> schedule for{" "}
-                        </>
-                      ) : (
-                        "Your schedule for "
+                {notifItems.map(({ kind }) =>
+                  kind === "staff" && staffNotif ? (
+                    <div
+                      key="staff"
+                      className={cn(
+                        "rounded-lg border p-3 space-y-2 transition-opacity",
+                        staffState === "read" && "opacity-60",
+                        "border-emerald-400/40 bg-emerald-50 dark:bg-emerald-950/20",
                       )}
-                      <span className="font-medium">
-                        {fmtDate(staffNotif.periodStart)} — {fmtDate(staffNotif.periodEnd)}
-                      </span>{" "}
-                      is now live.
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Open the Rota page to view your shifts.
-                    </p>
-                  </div>
-                )}
-
-                {/* ── Management: next rota deadline ── */}
-                {showMgmt && mgmtNotif && (
-                  <div
-                    className={cn(
-                      "rounded-lg border p-3 space-y-2 transition-opacity",
-                      mgmtState === "read" && "opacity-60",
-                      mgmtOverdue
-                        ? "border-destructive/40 bg-destructive/5"
-                        : mgmtUrgent
-                          ? "border-amber-400/40 bg-amber-50 dark:bg-amber-950/20"
-                          : "border-blue-400/40 bg-blue-50 dark:bg-blue-950/20",
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        {mgmtOverdue || mgmtUrgent ? (
-                          <AlertCircle
-                            className={cn(
-                              "h-4 w-4 shrink-0",
-                              mgmtOverdue ? "text-destructive" : "text-amber-500",
-                            )}
-                          />
-                        ) : (
-                          <Info className="h-4 w-4 shrink-0 text-blue-500" />
-                        )}
-                        <p
-                          className={cn(
-                            "text-xs font-semibold",
-                            mgmtOverdue
-                              ? "text-destructive"
-                              : mgmtUrgent
-                                ? "text-amber-700"
-                                : "text-blue-700",
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Bell className="h-4 w-4 shrink-0 text-emerald-600" />
+                          <p className="text-xs font-semibold text-emerald-700">
+                            Your Rota Is Published
+                          </p>
+                          {staffState === "unread" && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
                           )}
-                        >
-                          {mgmtOverdue
-                            ? "Next Rota Overdue"
-                            : mgmtUrgent
-                              ? "Next Rota Due Soon"
-                              : "Next Rota Reminder"}
-                        </p>
-                        {mgmtState === "unread" && (
-                          <span
-                            className={cn(
-                              "h-1.5 w-1.5 rounded-full shrink-0",
-                              mgmtOverdue ? "bg-destructive" : "bg-amber-500",
-                            )}
-                          />
+                        </div>
+                        {staffState !== null && (
+                          <button
+                            type="button"
+                            title={staffState === "unread" ? "Mark as read" : "Mark as unread"}
+                            onClick={staffState === "unread" ? staffMarkRead : staffMarkUnread}
+                            className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
+                          >
+                            {staffState === "unread" ? "Mark read" : "Mark unread"}
+                          </button>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        title={mgmtState === "unread" ? "Mark as read" : "Mark as unread"}
-                        onClick={mgmtState === "unread" ? mgmtMarkRead : mgmtMarkUnread}
-                        className="text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
-                      >
-                        {mgmtState === "unread" ? "Mark read" : "Mark unread"}
-                      </button>
+                      <p className="text-xs">
+                        {staffNotif.ward ? (
+                          <>
+                            <span className="font-medium">{staffNotif.ward}</span> schedule for{" "}
+                          </>
+                        ) : (
+                          "Your schedule for "
+                        )}
+                        <span className="font-medium">
+                          {fmtDate(staffNotif.periodStart)} — {fmtDate(staffNotif.periodEnd)}
+                        </span>{" "}
+                        is now live.
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Open the Rota page to view your shifts.
+                      </p>
                     </div>
+                  ) : kind === "mgmt" && mgmtNotif ? (
+                    <div
+                      key="mgmt"
+                      className={cn(
+                        "rounded-lg border p-3 space-y-2 transition-opacity",
+                        mgmtState === "read" && "opacity-60",
+                        mgmtOverdue
+                          ? "border-destructive/40 bg-destructive/5"
+                          : mgmtUrgent
+                            ? "border-amber-400/40 bg-amber-50 dark:bg-amber-950/20"
+                            : "border-blue-400/40 bg-blue-50 dark:bg-blue-950/20",
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          {mgmtOverdue || mgmtUrgent ? (
+                            <AlertCircle
+                              className={cn(
+                                "h-4 w-4 shrink-0",
+                                mgmtOverdue ? "text-destructive" : "text-amber-500",
+                              )}
+                            />
+                          ) : (
+                            <Info className="h-4 w-4 shrink-0 text-blue-500" />
+                          )}
+                          <p
+                            className={cn(
+                              "text-xs font-semibold",
+                              mgmtOverdue
+                                ? "text-destructive"
+                                : mgmtUrgent
+                                  ? "text-amber-700"
+                                  : "text-blue-700",
+                            )}
+                          >
+                            {mgmtOverdue
+                              ? "Next Rota Overdue"
+                              : mgmtUrgent
+                                ? "Next Rota Due Soon"
+                                : "Next Rota Reminder"}
+                          </p>
+                          {mgmtState === "unread" && (
+                            <span
+                              className={cn(
+                                "h-1.5 w-1.5 rounded-full shrink-0",
+                                mgmtOverdue ? "bg-destructive" : "bg-amber-500",
+                              )}
+                            />
+                          )}
+                        </div>
+                        {mgmtState !== null && (
+                          <button
+                            type="button"
+                            title={mgmtState === "unread" ? "Mark as read" : "Mark as unread"}
+                            onClick={mgmtState === "unread" ? mgmtMarkRead : mgmtMarkUnread}
+                            className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
+                          >
+                            {mgmtState === "unread" ? "Mark read" : "Mark unread"}
+                          </button>
+                        )}
+                      </div>
 
-                    <p className="text-xs">
-                      Current rota:{" "}
-                      <span className="font-medium">
-                        {fmtDate(mgmtNotif.periodStart)} — {fmtDate(mgmtNotif.periodEnd)}
-                      </span>
-                    </p>
-                    <p className="text-xs">
-                      Next period:{" "}
-                      <span className="font-medium">{fmtDate(mgmtNotif.nextPeriodStart)}</span>
-                    </p>
-                    <p className={cn("text-xs font-medium", mgmtOverdue && "text-destructive")}>
-                      {mgmtOverdue
-                        ? `Deadline passed (${fmtDate(mgmtNotif.deadline)}). Generate and approve the next rota now.`
-                        : `Approve next rota by ${fmtDate(mgmtNotif.deadline)} — 2 weeks before the next period starts.`}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Nurses need 2 weeks to apply for leave before the next rota is published.
-                    </p>
-                  </div>
+                      <p className="text-xs">
+                        Current rota:{" "}
+                        <span className="font-medium">
+                          {fmtDate(mgmtNotif.periodStart)} — {fmtDate(mgmtNotif.periodEnd)}
+                        </span>
+                      </p>
+                      <p className="text-xs">
+                        Next period:{" "}
+                        <span className="font-medium">{fmtDate(mgmtNotif.nextPeriodStart)}</span>
+                      </p>
+                      <p className={cn("text-xs font-medium", mgmtOverdue && "text-destructive")}>
+                        {mgmtOverdue
+                          ? `Deadline passed (${fmtDate(mgmtNotif.deadline)}). Generate and approve the next rota now.`
+                          : `Approve next rota by ${fmtDate(mgmtNotif.deadline)} — 2 weeks before the next period starts.`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Nurses need 2 weeks to apply for leave before the next rota is published.
+                      </p>
+                    </div>
+                  ) : null,
                 )}
               </div>
+            )}
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => setShowAllNotifs(true)}
+                className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground py-1 underline"
+              >
+                See more ({allNotifItems.length - 3} more)
+              </button>
+            )}
+            {showAllNotifs && allNotifItems.length > 3 && (
+              <button
+                type="button"
+                onClick={() => setShowAllNotifs(false)}
+                className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground py-1 underline"
+              >
+                Show less
+              </button>
             )}
           </div>
         </>

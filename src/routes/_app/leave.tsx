@@ -61,7 +61,8 @@ type StatusFilter = "All" | "Pending" | "Approved" | "Rejected";
 type ActiveTab = "leave" | "switches";
 
 function LeavePage() {
-  const { user, canApproveLeave, canRequestShiftSwitch, canApproveShiftSwitch } = useAuth();
+  const { user, nurseId, canApproveLeave, canRequestShiftSwitch, canApproveShiftSwitch } =
+    useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
@@ -69,10 +70,15 @@ function LeavePage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("leave");
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id],
+    queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id, nurseId],
     queryFn: async () => {
       let q = supabase.from("leave_requests").select("*").order("created_at", { ascending: false });
-      if (!canApproveLeave) q = q.eq("requested_by", user!.id);
+      if (!canApproveLeave) {
+        // Show own requests + switch requests where this nurse is the counterpart (nurse B)
+        q = nurseId
+          ? q.or(`requested_by.eq.${user!.id},reason.like.${SWITCH_PREFIX}${nurseId}|%`)
+          : q.eq("requested_by", user!.id);
+      }
       const { data, error } = await q;
       if (error) throw error;
       return data as LeaveRow[];
@@ -84,7 +90,7 @@ function LeavePage() {
   const switchRows = rows.filter((r) => isShiftSwitch(r));
   const activeRows = activeTab === "leave" ? leaveRows : switchRows;
 
-  async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected") {
+  async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
     if (status === "Approved" && l.nurse_id) {
       // Fetch only working (M/N) locked assignments — these are the shifts that need cover.
       const { data: publishedShifts } = await supabase
@@ -110,6 +116,7 @@ function LeavePage() {
             status: "Approved",
             reviewed_by: user?.id,
             reviewed_at: new Date().toISOString(),
+            review_note: note || null,
           })
           .eq("id", l.id);
         if (error) return toast.error(error.message);
@@ -136,7 +143,12 @@ function LeavePage() {
     // No locked working shifts in this window (draft rota or Rejected) — standard path.
     const { error } = await supabase
       .from("leave_requests")
-      .update({ status, reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
+      .update({
+        status,
+        reviewed_by: user?.id,
+        reviewed_at: new Date().toISOString(),
+        review_note: note || null,
+      })
       .eq("id", l.id);
     if (error) return toast.error(error.message);
     toast.success(`Leave ${status.toLowerCase()}`);
@@ -386,76 +398,149 @@ function LeaveTable({
 }: {
   rows: LeaveRow[];
   canApprove: boolean;
-  onReview: (l: LeaveRow, s: "Approved" | "Rejected") => void;
+  onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
 }) {
+  const [reviewing, setReviewing] = useState<{
+    row: LeaveRow;
+    status: "Approved" | "Rejected";
+  } | null>(null);
+  const [reviewNote, setReviewNote] = useState("");
+
+  function submitReview() {
+    if (!reviewing) return;
+    onReview(reviewing.row, reviewing.status, reviewNote);
+    setReviewing(null);
+    setReviewNote("");
+  }
+
   return (
-    <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              {canApprove && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
-              <th className="text-left font-semibold px-4 py-3">Type</th>
-              <th className="text-left font-semibold px-4 py-3">Period</th>
-              <th className="text-left font-semibold px-4 py-3">Status</th>
-              {canApprove && <th className="text-right font-semibold px-4 py-3">Action</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+    <>
+      <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <td
-                  colSpan={canApprove ? 5 : 3}
-                  className="px-4 py-8 text-center text-sm text-muted-foreground"
-                >
-                  No requests match the current filter.
-                </td>
+                {canApprove && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
+                <th className="text-left font-semibold px-4 py-3">Type</th>
+                <th className="text-left font-semibold px-4 py-3">Period</th>
+                <th className="text-left font-semibold px-4 py-3">Status</th>
+                {canApprove && <th className="text-right font-semibold px-4 py-3">Action</th>}
               </tr>
-            ) : null}
-            {rows.map((l) => (
-              <tr key={l.id} className="border-t hover:bg-muted/30">
-                {canApprove && <td className="px-4 py-3 font-medium">{l.nurse_name}</td>}
-                <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
-                <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                  {l.from_date} → {l.to_date}
-                </td>
-                <td className="px-4 py-3">
-                  <span
-                    className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={canApprove ? 5 : 3}
+                    className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
-                    {l.status}
-                  </span>
-                </td>
-                {canApprove && (
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1 justify-end">
-                      <button
-                        type="button"
-                        aria-label="Approve leave request"
-                        onClick={() => onReview(l, "Approved")}
-                        disabled={l.status !== "Pending"}
-                        className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
-                      >
-                        <Check className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Reject leave request"
-                        onClick={() => onReview(l, "Rejected")}
-                        disabled={l.status !== "Pending"}
-                        className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
+                    No requests match the current filter.
                   </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </tr>
+              ) : null}
+              {rows.map((l) => (
+                <tr key={l.id} className="border-t hover:bg-muted/30">
+                  {canApprove && <td className="px-4 py-3 font-medium">{l.nurse_name}</td>}
+                  <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                  <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                    {l.from_date} → {l.to_date}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+                    >
+                      {l.status}
+                    </span>
+                    {l.review_note && (
+                      <p
+                        className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-[200px]"
+                        title={l.review_note}
+                      >
+                        {l.review_note}
+                      </p>
+                    )}
+                  </td>
+                  {canApprove && (
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 justify-end">
+                        <button
+                          type="button"
+                          aria-label="Approve leave request"
+                          onClick={() => {
+                            setReviewing({ row: l, status: "Approved" });
+                            setReviewNote("");
+                          }}
+                          disabled={l.status !== "Pending"}
+                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Reject leave request"
+                          onClick={() => {
+                            setReviewing({ row: l, status: "Rejected" });
+                            setReviewNote("");
+                          }}
+                          disabled={l.status !== "Pending"}
+                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+
+      {reviewing && (
+        <Modal
+          title={reviewing.status === "Approved" ? "Approve leave" : "Reject leave"}
+          onClose={() => setReviewing(null)}
+        >
+          <p className="text-sm text-muted-foreground mb-4">
+            {reviewing.status === "Approved"
+              ? "Add a response note before approving (optional)."
+              : "Provide a reason for rejecting this leave request."}
+          </p>
+          <textarea
+            autoFocus
+            value={reviewNote}
+            onChange={(e) => setReviewNote(e.target.value)}
+            rows={3}
+            placeholder={
+              reviewing.status === "Approved" ? "Approval note…" : "Reason for rejection…"
+            }
+            className="w-full px-3 py-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => setReviewing(null)}
+              className="h-9 px-4 rounded-md border bg-card text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={reviewing.status === "Rejected" && !reviewNote.trim()}
+              onClick={submitReview}
+              className={`h-9 px-4 rounded-md text-sm font-medium disabled:opacity-40 ${
+                reviewing.status === "Approved"
+                  ? "bg-success text-white hover:bg-success/90"
+                  : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              }`}
+            >
+              {reviewing.status === "Approved" ? "Confirm approval" : "Confirm rejection"}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
