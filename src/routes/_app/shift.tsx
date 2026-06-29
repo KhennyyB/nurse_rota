@@ -41,6 +41,7 @@ type ShiftLog = {
   is_late: boolean;
   late_minutes: number | null;
   late_reason: string | null;
+  is_locum: boolean;
 };
 
 type Assignment = {
@@ -208,6 +209,7 @@ function ShiftPage() {
     id: string;
     shift: "M" | "N";
     ward: string;
+    facility: string;
   } | null>({
     queryKey: ["my-locum-today", nurseId, today],
     enabled: !!nurseId,
@@ -215,12 +217,12 @@ function ShiftPage() {
     queryFn: async () => {
       const { data } = await supabase
         .from("locum_requests")
-        .select("id, shift, ward")
+        .select("id, shift, ward, facility")
         .eq("accepted_by_nurse_id", nurseId!)
         .eq("shift_date", today)
         .eq("status", "filled")
         .maybeSingle();
-      return data as { id: string; shift: "M" | "N"; ward: string } | null;
+      return data as { id: string; shift: "M" | "N"; ward: string; facility: string } | null;
     },
   });
 
@@ -268,6 +270,7 @@ function ShiftPage() {
         .from("shift_logs")
         .select("*")
         .eq("nurse_id", nurseId!)
+        .eq("is_locum", false)
         .gte("shift_date", periodStart)
         .lte("shift_date", pe)
         .order("shift_date", { ascending: false });
@@ -300,7 +303,7 @@ function ShiftPage() {
         id: queryAssignment?.id ?? "",
         shift: todayLocum.shift,
         shift_date: today,
-        ward: todayLocum.ward,
+        ward: `${todayLocum.ward} · ${todayLocum.facility}`,
         status: "published",
       }
     : null;
@@ -363,8 +366,10 @@ function ShiftPage() {
   async function handleStartClick() {
     setGeoError(null);
     setGeoChecking(true);
+    // Locum shifts must be geo-verified against the locum facility, not the nurse's home facility.
+    const facilityToCheck = todayLocum?.facility ?? nurseFacility;
     try {
-      const geo = await verifyLocationAndCaptureIp(nurseFacility);
+      const geo = await verifyLocationAndCaptureIp(facilityToCheck);
       pendingGeoRef.current = geo;
       if (isLate) {
         setLateDialog({ open: true, reason: "", capturedMinutes: minutesSinceStart });
@@ -389,8 +394,8 @@ function ShiftPage() {
 
     if (error) return toast.error(error.message);
 
-    // Accumulate hours into nurses.hours_this_month
-    if (nurseId)
+    // Locum hours are tracked separately — do not add to the nurse's regular monthly total.
+    if (nurseId && !log.is_locum)
       await supabase.rpc("increment_nurse_hours", { p_nurse_id: nurseId, p_hours: hours });
 
     if (!isAuto) toast.success(`Shift ended — ${fmtHours(hours)} logged`);
