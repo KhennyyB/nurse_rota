@@ -65,6 +65,13 @@ export async function adminBanUser(userId: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+/** Reset a user's password and flag them to change it on next login. */
+export async function adminResetUserPassword(userId: string, newPassword: string): Promise<void> {
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.updateUserById(userId, { password: newPassword });
+  if (error) throw new Error(error.message);
+}
+
 /** Remove a user's ban so they can log in again. */
 export async function adminUnbanUser(userId: string): Promise<void> {
   const admin = createAdminClient();

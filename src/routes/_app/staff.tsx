@@ -29,6 +29,7 @@ import {
   adminCreateUser,
   adminBanUser,
   adminUnbanUser,
+  adminResetUserPassword,
 } from "@/integrations/supabase/admin-client";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
@@ -1457,11 +1458,8 @@ function ResetPasswordModal({
     if (password.length < 8) return toast.error("Password must be at least 8 characters");
     setBusy(true);
     try {
-      const { error } = await supabase.rpc("admin_reset_password", {
-        p_user_id: userId,
-        p_new_password: password,
-      });
-      if (error) throw new Error(error.message);
+      await adminResetUserPassword(userId, password);
+      await supabase.from("profiles").update({ must_change_password: true }).eq("id", userId);
       await logAudit("Reset password", name);
       setDone(true);
     } catch (err) {
