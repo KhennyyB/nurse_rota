@@ -47,13 +47,16 @@ type Ward = {
 };
 
 function WardsPage() {
-  const { canManageWards, nurseFacility, isAdmin } = useAuth();
+  const { canManageWards, nurseFacility, isAdmin, activeRole } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [editingWard, setEditingWard] = useState<Ward | null>(null);
   const [seeding, setSeeding] = useState(false);
 
-  const defaultFacility = nurseFacility && !isAdmin ? nurseFacility : "";
+  // Admin, CNO and HR/Admin oversee all facilities; facility-bound roles start on their own.
+  const isMultiFacility =
+    isAdmin || activeRole === "cno" || activeRole === "hr_admin";
+  const defaultFacility = nurseFacility && !isMultiFacility ? nurseFacility : "";
   const [selectedFacility, setSelectedFacility] = useState(defaultFacility);
 
   const { data: wards = [], isLoading } = useQuery({
@@ -264,7 +267,7 @@ function WardsPage() {
         <>
           {/* Facility tab bar */}
           <div className="flex items-center gap-2 mb-5">
-            {(isAdmin ? FACILITIES : [selectedFacility as (typeof FACILITIES)[number]]).map((f) => (
+            {(isMultiFacility ? FACILITIES : [selectedFacility as (typeof FACILITIES)[number]]).map((f) => (
               <button
                 key={f}
                 type="button"

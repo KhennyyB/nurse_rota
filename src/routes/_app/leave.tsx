@@ -429,7 +429,7 @@ function LeavePage() {
               : "Submit a new request to get started."
           }
           action={
-            activeTab === "leave" ? (
+            activeTab === "leave" && canRequestLeave ? (
               <button
                 type="button"
                 onClick={() => setShowAdd(true)}
