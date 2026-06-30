@@ -315,7 +315,12 @@ function ShiftPage() {
     if (!nurseId || !assignment || !["M", "N"].includes(assignment.shift)) return;
 
     const shiftType = assignment.shift as "M" | "N";
-    const startedAt = new Date();
+    const actualNow = new Date();
+    // Clamp to the official start (8:00 / 17:00) so nurses who arrive during
+    // the 15-minute early window don't accumulate hours before the shift begins.
+    const officialStart = new Date();
+    officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
+    const startedAt = actualNow < officialStart ? officialStart : actualNow;
     const expectedEnd = calcExpectedEnd(shiftType, startedAt);
     const geo = pendingGeoRef.current;
     pendingGeoRef.current = null;
@@ -414,15 +419,15 @@ function ShiftPage() {
     return t;
   })();
 
-  // Minutes elapsed since the scheduled start (negative = not started yet).
+  // Minutes elapsed since the scheduled start (negative = before official start).
   const minutesSinceStart = shiftStartTime
     ? Math.floor((now.getTime() - shiftStartTime.getTime()) / 60000)
     : -Infinity;
 
-  // Button is only enabled once the shift has officially begun.
-  const canStartShift = minutesSinceStart >= 0;
-  // Late = more than 15 minutes after the scheduled start.
-  const isLate = minutesSinceStart > 15;
+  // Button is visible from 15 minutes before official start (7:45 AM / 4:45 PM).
+  const canStartShift = minutesSinceStart >= -15;
+  // Late = any moment after the official start (08:00 / 17:00).
+  const isLate = minutesSinceStart > 0;
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -431,7 +436,7 @@ function ShiftPage() {
   const isActive = shiftLog && !shiftLog.ended_at;
   const isEnded = shiftLog && !!shiftLog.ended_at;
   const elapsed = isActive
-    ? fmtDuration(now.getTime() - new Date(shiftLog.started_at).getTime())
+    ? fmtDuration(Math.max(0, now.getTime() - new Date(shiftLog.started_at).getTime()))
     : null;
 
   // ── Render ────────────────────────────────────────────────────────────────
