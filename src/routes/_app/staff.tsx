@@ -18,6 +18,11 @@ import {
   Clock,
   UserX,
   UserCheck,
+  RotateCcw,
+  Eye,
+  EyeOff,
+  Copy,
+  ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -94,6 +99,10 @@ function StaffPage() {
   const [showSetHours, setShowSetHours] = useState(false);
   const [editingNurse, setEditingNurse] = useState<Nurse | null>(null);
   const [createLoginNurse, setCreateLoginNurse] = useState<Nurse | null>(null);
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<{
+    name: string;
+    userId: string;
+  } | null>(null);
 
   const { data: nurses = [], isLoading } = useQuery({
     queryKey: ["nurses"],
@@ -493,13 +502,23 @@ function StaffPage() {
                           }
                           if (info.isActive) {
                             return (
-                              <div className="inline-flex items-center gap-1.5">
+                              <div className="inline-flex items-center gap-1">
                                 <span
                                   className="inline-flex items-center gap-1 text-[11px] text-success font-medium"
                                   title="Login active"
                                 >
                                   <CheckCircle2 className="h-3.5 w-3.5" /> Active
                                 </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setResetPasswordTarget({ name: n.name, userId: info.id })
+                                  }
+                                  className="h-6 px-1.5 rounded border text-[10px] text-muted-foreground hover:bg-amber-50 hover:text-amber-700 hover:border-amber-300 transition"
+                                  title="Reset password"
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => void deactivateLogin(info.id)}
@@ -582,6 +601,13 @@ function StaffPage() {
             setCreateLoginNurse(null);
             qc.invalidateQueries({ queryKey: ["profile-names"] });
           }}
+        />
+      )}
+      {resetPasswordTarget && (
+        <ResetPasswordModal
+          name={resetPasswordTarget.name}
+          userId={resetPasswordTarget.userId}
+          onClose={() => setResetPasswordTarget(null)}
         />
       )}
     </div>
@@ -1399,6 +1425,159 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// ── Reset Password modal ───────────────────────────────────────────────────────
+
+function ResetPasswordModal({
+  name,
+  userId,
+  onClose,
+}: {
+  name: string;
+  userId: string;
+  onClose: () => void;
+}) {
+  const [password, setPassword] = useState(() => generatePassword());
+  const [showPw, setShowPw] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  async function copyToClipboard() {
+    await navigator.clipboard.writeText(password);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (password.length < 8) return toast.error("Password must be at least 8 characters");
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc("admin_reset_password", {
+        p_user_id: userId,
+        p_new_password: password,
+      });
+      if (error) throw new Error(error.message);
+      await logAudit("Reset password", name);
+      setDone(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to reset password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const cls =
+    "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <Modal title="Reset Password" onClose={onClose}>
+      {done ? (
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-emerald-800">Password reset successfully</p>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                {name} will be prompted to change their password on next login.
+              </p>
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1.5">
+              Temporary password — share securely:
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 h-10 px-3 rounded-md border bg-muted text-sm font-mono flex items-center">
+                {password}
+              </code>
+              <button
+                type="button"
+                onClick={copyToClipboard}
+                className="h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted inline-flex items-center gap-1.5"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+          >
+            Done
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-800">
+              Resetting <strong>{name}</strong>&apos;s password will require them to set a new
+              password on their next login.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium block mb-1.5">New temporary password</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showPw ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={8}
+                  required
+                  className={cls + " pr-9"}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPassword(generatePassword())}
+                className="h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted inline-flex items-center gap-1.5 shrink-0"
+                title="Generate new password"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Generate
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Minimum 8 characters.</p>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 h-10 rounded-md border bg-background text-sm font-medium hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy || password.length < 8}
+              className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 inline-flex items-center justify-center gap-2"
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="h-4 w-4" />
+              )}
+              Reset password
+            </button>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }

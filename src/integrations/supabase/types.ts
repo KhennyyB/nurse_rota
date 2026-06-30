@@ -582,6 +582,13 @@ export type Database = {
         };
         Returns: null;
       };
+      admin_reset_password: {
+        Args: {
+          p_user_id: string;
+          p_new_password: string;
+        };
+        Returns: null;
+      };
       auto_end_overdue_shifts: {
         Args: Record<string, never>;
         Returns: number;
