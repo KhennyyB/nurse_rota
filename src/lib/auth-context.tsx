@@ -34,16 +34,32 @@ interface AuthCtx {
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: AppRole[]) => boolean;
   isAdmin: boolean;
+  // ── Capability flags (all read from the permissions matrix) ───────────────
   canManageRoles: boolean;
   canDelete: boolean;
   canManageStaff: boolean;
+  canManageWards: boolean;
+  canEditRota: boolean;
+  canAutoGenerate: boolean;
+  canSubmitApproval: boolean;
+  canApproveChiefMatron: boolean;
+  canApproveCno: boolean;
+  canPublishRota: boolean;
+  canRevertPublished: boolean;
   canApproveLeave: boolean;
+  canRequestLeave: boolean;
   canRequestShiftSwitch: boolean;
   canApproveShiftSwitch: boolean;
   canCreateLogin: boolean;
   canEditTargetHours: boolean;
   canPrintStaff: boolean;
   canPrintSchedule: boolean;
+  canRequestLocum: boolean;
+  canApproveLocum: boolean;
+  canSendLocumInvites: boolean;
+  canViewLocumHours: boolean;
+  canViewReports: boolean;
+  canViewAudit: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -186,6 +202,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   void capabilitiesVersion;
   const hasRole = (r: AppRole) => ar === r;
   const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
+  // Shorthand: true if the active role is in the saved (or default) capability roles.
+  const cap = (key: string, defaults: AppRole[]) =>
+    ar !== null && capabilityRoles(key, defaults).includes(ar);
   const isInActiveRole = (...rs: AppRole[]) => ar !== null && rs.includes(ar);
 
   const value: AuthCtx = {
@@ -204,32 +223,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasRole,
     hasAnyRole,
     isAdmin: ar === "admin",
-    canManageRoles: ar === "admin",
-    canDelete: ar === "admin",
-    canManageStaff: isInActiveRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
-    canApproveLeave: isInActiveRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
-    canRequestShiftSwitch: isInActiveRole("admin", "chief_matron"),
-    canApproveShiftSwitch: isInActiveRole("admin", "cno"),
+    canManageRoles: cap("manage_roles", ["admin"]),
+    canDelete: cap("delete_staff", ["admin"]),
+    canManageStaff: cap("manage_staff", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canManageWards: cap("manage_wards", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canEditRota: cap("edit_rota", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canAutoGenerate: cap("auto_generate", ["admin", "cno", "chief_matron"]),
+    canSubmitApproval: cap("submit_approval", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canApproveChiefMatron: cap("approve_chief_matron", ["admin", "chief_matron"]),
+    canApproveCno: cap("approve_cno", ["admin", "cno"]),
+    canPublishRota: cap("publish_rota", ["admin", "cno"]),
+    canRevertPublished: cap("revert_published", ["admin"]),
+    canApproveLeave: cap("approve_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canRequestLeave: cap("request_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"]),
+    canRequestShiftSwitch: cap("request_shift_switch", ["admin", "chief_matron"]),
+    canApproveShiftSwitch: cap("approve_shift_switch", ["admin", "cno"]),
     canCreateLogin: ar === "admin",
-    canEditTargetHours: ar !== null && capabilityRoles("edit_target_hours", ["admin"]).includes(ar),
-    canPrintStaff:
-      ar !== null &&
-      capabilityRoles("print_staff_list", [
-        "admin",
-        "cno",
-        "chief_matron",
-        "head_nurse",
-        "hr_admin",
-      ]).includes(ar),
-    canPrintSchedule:
-      ar !== null &&
-      capabilityRoles("print_schedule", [
-        "admin",
-        "cno",
-        "chief_matron",
-        "head_nurse",
-        "hr_admin",
-      ]).includes(ar),
+    canEditTargetHours: cap("edit_target_hours", ["admin"]),
+    canPrintStaff: cap("print_staff_list", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canPrintSchedule: cap("print_schedule", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canRequestLocum: cap("request_locum", ["admin", "chief_matron"]),
+    canApproveLocum: cap("approve_locum", ["admin", "cno"]),
+    canSendLocumInvites: cap("send_locum_invites", ["admin", "chief_matron"]),
+    canViewLocumHours: cap("view_locum_hours", ["admin", "cno", "chief_matron"]),
+    canViewReports: cap("view_reports", ["admin", "cno", "chief_matron", "hr_admin"]),
+    canViewAudit: cap("view_audit", ["admin", "cno"]),
     signOut: async () => {
       if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
       setActiveRole(null);

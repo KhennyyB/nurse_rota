@@ -141,11 +141,20 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 function LocumPage() {
-  const { activeRole, hasAnyRole, user, nurseId, fullName } = useAuth();
+  const {
+    activeRole,
+    user,
+    nurseId,
+    fullName,
+    canRequestLocum,
+    canApproveLocum,
+    canSendLocumInvites,
+    canViewLocumHours,
+  } = useAuth();
   const qc = useQueryClient();
 
-  const isMatron = hasAnyRole(["chief_matron", "admin"]);
-  const isCNO = hasAnyRole(["cno", "admin"]);
+  const isMatron = canRequestLocum;
+  const isCNO = canApproveLocum;
   const isNurse = activeRole === "nurse";
 
   type Tab = "my-requests" | "review" | "all" | "invites" | "history";
@@ -205,7 +214,7 @@ function LocumPage() {
 
   const { data: filledRequests = [], isLoading: historyLoading } = useQuery({
     queryKey: ["locum-history"],
-    enabled: hasAnyRole(["admin", "cno", "chief_matron"]),
+    enabled: canViewLocumHours,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("locum_requests")
@@ -219,7 +228,7 @@ function LocumPage() {
 
   const { data: locumLogs = [] } = useQuery({
     queryKey: ["locum-shift-logs"],
-    enabled: hasAnyRole(["admin", "cno", "chief_matron"]),
+    enabled: canViewLocumHours,
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_logs")
@@ -596,7 +605,7 @@ function LocumPage() {
           { id: "all" as Tab, label: "All Requests" },
         ]
       : []),
-    ...(hasAnyRole(["admin", "cno", "chief_matron"])
+    ...(canViewLocumHours
       ? [{ id: "history" as Tab, label: "Locum Hours" }]
       : []),
   ];

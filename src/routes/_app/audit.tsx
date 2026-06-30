@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { ShieldCheck } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDistanceToNow } from "date-fns";
+import { useAuth } from "@/lib/auth-context";
 
 export const Route = createFileRoute("/_app/audit")({
   component: AuditPage,
@@ -20,6 +21,18 @@ type Log = {
 };
 
 function AuditPage() {
+  const { canViewAudit } = useAuth();
+  if (!canViewAudit) {
+    return (
+      <div className="py-20 text-center text-sm text-muted-foreground">
+        You do not have permission to view the audit log.
+      </div>
+    );
+  }
+  return <AuditContent />;
+}
+
+function AuditContent() {
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ["audit"],
     queryFn: async () => {

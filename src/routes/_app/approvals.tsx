@@ -189,7 +189,16 @@ function parseWards(ward: string | null): string[] {
 }
 
 function ApprovalsPage() {
-  const { hasAnyRole, user, isAdmin, nurseFacility } = useAuth();
+  const {
+    user,
+    isAdmin,
+    nurseFacility,
+    canApproveChiefMatron,
+    canApproveCno,
+    canPublishRota,
+    canSubmitApproval,
+    canRevertPublished,
+  } = useAuth();
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -199,11 +208,10 @@ function ApprovalsPage() {
   const lockedFacility = !isAdmin && nurseFacility ? nurseFacility : null;
   const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
-  const canApproveChief = hasAnyRole(["admin", "chief_matron"]);
-  const canApproveCNO = hasAnyRole(["admin", "cno"]);
-  const canPublish = hasAnyRole(["admin", "cno"]);
-  const canSubmit = hasAnyRole(["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]);
-  const canRevertPublished = hasAnyRole(["admin"]);
+  const canApproveChief = canApproveChiefMatron;
+  const canApproveCNO = canApproveCno;
+  const canPublish = canPublishRota;
+  const canSubmit = canSubmitApproval;
 
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses-approvals"],

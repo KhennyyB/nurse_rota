@@ -132,11 +132,20 @@ function summariseViolations(violations: SafetyViolation[]) {
 }
 
 function RotaPage() {
-  const { canManageStaff, hasAnyRole, user, nurseFacility, isAdmin, nurseId, activeRole } =
-    useAuth();
+  const {
+    canEditRota,
+    canAutoGenerate,
+    canSubmitApproval,
+    user,
+    nurseFacility,
+    isAdmin,
+    nurseId,
+    activeRole,
+  } = useAuth();
   const { myOnly } = Route.useSearch();
-  const canEdit = canManageStaff;
-  const canGenerate = hasAnyRole(["admin", "cno", "chief_matron"]);
+  const canEdit = canEditRota;
+  const canGenerate = canAutoGenerate;
+  const canSubmit = canSubmitApproval;
   const qc = useQueryClient();
 
   // Non-admin nurses are locked to their own facility.
@@ -1267,7 +1276,7 @@ function RotaPage() {
                 <Trash2 className="h-4 w-4" /> Clear draft
               </button>
             )}
-            {canEdit && (
+            {canSubmit && (
               <button
                 type="button"
                 onClick={handleSubmitRota}
@@ -1351,7 +1360,7 @@ function RotaPage() {
               : "Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
           }
           action={
-            isAdmin ? (
+            canGenerate ? (
               <button
                 type="button"
                 onClick={openGenDialog}

@@ -61,8 +61,14 @@ type StatusFilter = "All" | "Pending" | "Approved" | "Rejected";
 type ActiveTab = "leave" | "switches";
 
 function LeavePage() {
-  const { user, nurseId, canApproveLeave, canRequestShiftSwitch, canApproveShiftSwitch } =
-    useAuth();
+  const {
+    user,
+    nurseId,
+    canApproveLeave,
+    canRequestLeave,
+    canRequestShiftSwitch,
+    canApproveShiftSwitch,
+  } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
@@ -338,13 +344,15 @@ function LeavePage() {
                 <ArrowLeftRight className="h-4 w-4" /> Shift Switch
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => setShowAdd(true)}
-              className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
-            >
-              <Plus className="h-4 w-4" /> New request
-            </button>
+            {canRequestLeave && (
+              <button
+                type="button"
+                onClick={() => setShowAdd(true)}
+                className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+              >
+                <Plus className="h-4 w-4" /> New request
+              </button>
+            )}
           </div>
         }
       />

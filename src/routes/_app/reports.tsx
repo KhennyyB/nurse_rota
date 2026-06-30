@@ -214,6 +214,18 @@ function openPrintWindow(html: string) {
 }
 
 function ReportsPage() {
+  const { canViewReports } = useAuth();
+  if (!canViewReports) {
+    return (
+      <div className="py-20 text-center text-sm text-muted-foreground">
+        You do not have permission to view reports.
+      </div>
+    );
+  }
+  return <ReportsContent />;
+}
+
+function ReportsContent() {
   const qc = useQueryClient();
   const { canPrintStaff, canPrintSchedule } = useAuth();
 
@@ -345,8 +357,7 @@ function ReportsPage() {
       if (log.hours_logged != null) {
         hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
         shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
-        if (log.is_swap)
-          swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + log.hours_logged);
+        if (log.is_swap) swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + log.hours_logged);
         if (log.is_leave)
           leave.set(log.nurse_id, (leave.get(log.nurse_id) ?? 0) + log.hours_logged);
       }
@@ -949,7 +960,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           </div>
                         </div>
                         {(swapH > 0 || leaveH > 0) && (
-                          <div className="pl-[calc(9rem+0.75rem)] flex gap-2">
+                          <div className="pl-39 flex gap-2">
                             {swapH > 0 && (
                               <span className="text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
                                 {swapH.toFixed(1)}h swap
@@ -1072,7 +1083,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                               <Clock className="h-3 w-3" />
                               {log.late_minutes}m late
                               {log.late_reason && (
-                                <span className="hidden sm:inline text-amber-600 max-w-[120px] truncate">
+                                <span className="hidden sm:inline text-amber-600 max-w-30 truncate">
                                   — {log.late_reason}
                                 </span>
                               )}
@@ -1229,7 +1240,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                                 <Clock className="h-3 w-3" />
                                 {log.late_minutes}m late
                                 {log.late_reason && (
-                                  <span className="hidden sm:inline text-amber-600 max-w-[120px] truncate">
+                                  <span className="hidden sm:inline text-amber-600 max-w-30 truncate">
                                     — {log.late_reason}
                                   </span>
                                 )}

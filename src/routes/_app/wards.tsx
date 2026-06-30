@@ -47,7 +47,7 @@ type Ward = {
 };
 
 function WardsPage() {
-  const { canManageStaff, nurseFacility, isAdmin } = useAuth();
+  const { canManageWards, nurseFacility, isAdmin } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [editingWard, setEditingWard] = useState<Ward | null>(null);
@@ -224,7 +224,7 @@ function WardsPage() {
         title="Wards & Safety Rules"
         subtitle="Minimum staffing rules enforced by the rota engine"
         actions={
-          canManageStaff &&
+          canManageWards &&
           selectedFacility && (
             <button
               type="button"
@@ -281,7 +281,7 @@ function WardsPage() {
           </div>
 
           {/* Seed banners — shown when default wards are missing from DB */}
-          {selectedFacility === "Ikoyi" && canManageStaff && missingIkoyiWards.length > 0 && (
+          {selectedFacility === "Ikoyi" && canManageWards && missingIkoyiWards.length > 0 && (
             <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
               <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               <div className="flex-1">
@@ -304,7 +304,7 @@ function WardsPage() {
               </button>
             </div>
           )}
-          {selectedFacility === "Ikeja" && canManageStaff && missingIkejaWards.length > 0 && (
+          {selectedFacility === "Ikeja" && canManageWards && missingIkejaWards.length > 0 && (
             <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
               <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               <div className="flex-1">
@@ -327,7 +327,7 @@ function WardsPage() {
               </button>
             </div>
           )}
-          {selectedFacility === "Ligali" && canManageStaff && missingLigaliWards.length > 0 && (
+          {selectedFacility === "Ligali" && canManageWards && missingLigaliWards.length > 0 && (
             <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
               <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               <div className="flex-1">
@@ -358,14 +358,14 @@ function WardsPage() {
               icon={<Building2 className="h-6 w-6" />}
               title="No wards configured"
               description={
-                canManageStaff
+                canManageWards
                   ? ["Ikoyi", "Ikeja", "Ligali"].includes(selectedFacility)
                     ? "Click 'Sync defaults' above to populate wards, or add them manually."
                     : "Add wards to define minimum staffing rules per shift."
                   : "Ask an administrator to configure wards."
               }
               action={
-                canManageStaff && (
+                canManageWards && (
                   <button
                     type="button"
                     onClick={() => setShowAdd(true)}
@@ -382,7 +382,7 @@ function WardsPage() {
                 <WardCard
                   key={w.id}
                   ward={w}
-                  canManage={canManageStaff}
+                  canManage={canManageWards}
                   onEdit={() => setEditingWard(w)}
                   onDelete={() => del(w)}
                 />
