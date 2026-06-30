@@ -742,7 +742,7 @@ function ShiftPage() {
 
         {!hasShiftToday && !assignment && (
           <p className="text-sm text-muted-foreground text-center py-2">
-            No shift assignment found for today. Check with your ward manager.
+            No shift assignment found for today.
           </p>
         )}
       </div>

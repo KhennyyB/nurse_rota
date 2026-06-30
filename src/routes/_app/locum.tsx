@@ -146,6 +146,7 @@ function LocumPage() {
     user,
     nurseId,
     fullName,
+    nurseFacility,
     canRequestLocum,
     canApproveLocum,
     canSendLocumInvites,
@@ -155,6 +156,10 @@ function LocumPage() {
 
   const isMatron = canRequestLocum;
   const isCNO = canApproveLocum;
+
+  // CNO (and admin, since admin is in approve_locum defaults) see all facilities.
+  // Chief Matron is scoped to their own facility.
+  const locumFacility: string | null = isCNO ? null : (nurseFacility ?? null);
   const isNurse = activeRole === "nurse";
 
   type Tab = "my-requests" | "review" | "all" | "invites" | "history";
@@ -213,14 +218,16 @@ function LocumPage() {
   });
 
   const { data: filledRequests = [], isLoading: historyLoading } = useQuery({
-    queryKey: ["locum-history"],
+    queryKey: ["locum-history", locumFacility],
     enabled: canViewLocumHours,
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("locum_requests")
         .select("*")
         .eq("status", "filled")
         .order("accepted_at", { ascending: false });
+      if (locumFacility) q = q.eq("facility", locumFacility);
+      const { data, error } = await q;
       if (error) throw error;
       return data as LocumRequest[];
     },
@@ -605,9 +612,7 @@ function LocumPage() {
           { id: "all" as Tab, label: "All Requests" },
         ]
       : []),
-    ...(canViewLocumHours
-      ? [{ id: "history" as Tab, label: "Locum Hours" }]
-      : []),
+    ...(canViewLocumHours ? [{ id: "history" as Tab, label: "Locum Hours" }] : []),
   ];
 
   return (
@@ -699,7 +704,10 @@ function LocumPage() {
       {/* Dialogs */}
       {showCreate && (
         <CreateRequestModal
-          wards={wards.filter((w) => LOCUM_WARDS.includes(w.name))}
+          lockedFacility={locumFacility}
+          wards={wards.filter(
+            (w) => LOCUM_WARDS.includes(w.name) && (!locumFacility || w.facility === locumFacility),
+          )}
           onClose={() => setShowCreate(false)}
           onSubmit={handleCreate}
         />
@@ -1064,7 +1072,7 @@ function LocumHistoryView({
                       >
                         {log.late_minutes}m late
                         {log.late_reason && (
-                          <span className="hidden sm:inline text-amber-600 max-w-[140px] truncate">
+                          <span className="hidden sm:inline text-amber-600 max-w-35 truncate">
                             — {log.late_reason}
                           </span>
                         )}
@@ -1270,10 +1278,12 @@ function StatBox({ icon, label, value }: { icon: React.ReactNode; label: string;
 
 function CreateRequestModal({
   wards,
+  lockedFacility,
   onClose,
   onSubmit,
 }: {
   wards: { name: string; facility: string | null }[];
+  lockedFacility: string | null;
   onClose: () => void;
   onSubmit: (form: {
     shift_date: string;
@@ -1291,7 +1301,7 @@ function CreateRequestModal({
   const [busy, setBusy] = useState(false);
   const [shiftDate, setShiftDate] = useState(todayYmd());
   const [shift, setShift] = useState<"M" | "N">("M");
-  const [facility, setFacility] = useState(facilities[0] ?? "");
+  const [facility, setFacility] = useState(lockedFacility ?? facilities[0] ?? "");
   const [ward, setWard] = useState("");
   const [nursesInWard, setNursesInWard] = useState("");
   const [ventPatients, setVentPatients] = useState("");
@@ -1358,20 +1368,28 @@ function CreateRequestModal({
         </div>
 
         <Field label="Facility *">
-          <select
-            aria-label="Facility"
-            className={inp}
-            value={facility}
-            onChange={(e) => handleFacilityChange(e.target.value)}
-            required
-          >
-            <option value="">Select facility…</option>
-            {facilities.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+          {lockedFacility ? (
+            <div
+              className={`${inp} flex items-center bg-muted text-muted-foreground cursor-not-allowed`}
+            >
+              {lockedFacility}
+            </div>
+          ) : (
+            <select
+              aria-label="Facility"
+              className={inp}
+              value={facility}
+              onChange={(e) => handleFacilityChange(e.target.value)}
+              required
+            >
+              <option value="">Select facility…</option>
+              {facilities.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          )}
         </Field>
 
         <Field label="Ward *">

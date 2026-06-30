@@ -227,14 +227,18 @@ function ReportsPage() {
 
 function ReportsContent() {
   const qc = useQueryClient();
-  const { canPrintStaff, canPrintSchedule } = useAuth();
+  const { canPrintStaff, canPrintSchedule, nurseFacility, isAdmin, activeRole } = useAuth();
+
+  // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
+  const reportFacility: string | null =
+    isAdmin || activeRole === "cno" || activeRole === "hr_admin" ? null : (nurseFacility ?? null);
 
   const [tab, setTab] = useState<
     "overview" | "hours" | "locum" | "periods" | "leave" | "staff-dir" | "schedules"
   >("overview");
   const [closingPeriod, setClosingPeriod] = useState(false);
-  const [dirFacility, setDirFacility] = useState<string>(FACILITIES[0]);
-  const [archiveFacility, setArchiveFacility] = useState<string>("");
+  const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
+  const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
 
   const { data: nurses = [] } = useQuery<Nurse[]>({
@@ -346,6 +350,20 @@ function ReportsContent() {
     enabled: tab === "schedules",
   });
 
+  // Nurses and requests scoped to reportFacility (null = all facilities visible).
+  const scopedNurses = useMemo(
+    () => (reportFacility ? nurses.filter((n) => n.facility === reportFacility) : nurses),
+    [nurses, reportFacility],
+  );
+  const scopedNurseIds = useMemo(() => new Set(scopedNurses.map((n) => n.id)), [scopedNurses]);
+  const scopedLocumRequests = useMemo(
+    () =>
+      reportFacility
+        ? locumFilledRequests.filter((r) => r.facility === reportFacility)
+        : locumFilledRequests,
+    [locumFilledRequests, reportFacility],
+  );
+
   // Build per-nurse hours for current period (regular + swap + leave; locum excluded).
   // swapHoursMap and leaveHoursMap allow breakdown display without excluding from total.
   const { nurseHoursMap, nurseShiftCountMap, swapHoursMap, leaveHoursMap } = useMemo(() => {
@@ -353,7 +371,7 @@ function ReportsContent() {
     const shifts = new Map<string, number>();
     const swap = new Map<string, number>();
     const leave = new Map<string, number>();
-    for (const log of shiftLogs) {
+    for (const log of shiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id))) {
       if (log.hours_logged != null) {
         hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
         shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
@@ -368,15 +386,15 @@ function ReportsContent() {
       swapHoursMap: swap,
       leaveHoursMap: leave,
     };
-  }, [shiftLogs]);
+  }, [shiftLogs, scopedNurseIds]);
 
   const totalLoggedHours = useMemo(
     () => [...nurseHoursMap.values()].reduce((s, h) => s + h, 0),
     [nurseHoursMap],
   );
   const activeNurses = useMemo(
-    () => nurses.filter((n) => nurseHoursMap.has(n.id)),
-    [nurses, nurseHoursMap],
+    () => scopedNurses.filter((n) => nurseHoursMap.has(n.id)),
+    [scopedNurses, nurseHoursMap],
   );
 
   // Locum derived data
@@ -389,14 +407,14 @@ function ReportsContent() {
   const { locumHoursMap, locumShiftCountMap } = useMemo(() => {
     const hours = new Map<string, number>();
     const shifts = new Map<string, number>();
-    for (const log of locumShiftLogs) {
+    for (const log of locumShiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id))) {
       if (log.hours_logged != null) {
         hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
       }
       shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
     }
     return { locumHoursMap: hours, locumShiftCountMap: shifts };
-  }, [locumShiftLogs]);
+  }, [locumShiftLogs, scopedNurseIds]);
 
   const totalLocumHours = useMemo(
     () => [...locumHoursMap.values()].reduce((s, h) => s + h, 0),
@@ -405,8 +423,8 @@ function ReportsContent() {
 
   // Staff directory: nurses by selected facility, grouped by ward
   const facilityNurses = useMemo(
-    () => nurses.filter((n) => n.facility === dirFacility),
-    [nurses, dirFacility],
+    () => scopedNurses.filter((n) => n.facility === dirFacility),
+    [scopedNurses, dirFacility],
   );
   const nursesByWard = useMemo(() => {
     const map = new Map<string, Nurse[]>();
@@ -605,8 +623,8 @@ function ReportsContent() {
   }
 
   function exportLocumReport() {
-    if (locumFilledRequests.length === 0) return toast.error("No locum shifts to export");
-    const rows = locumFilledRequests.map((r) => {
+    if (scopedLocumRequests.length === 0) return toast.error("No locum shifts to export");
+    const rows = scopedLocumRequests.map((r) => {
       const log = r.accepted_by_nurse_id
         ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
         : undefined;
@@ -919,8 +937,16 @@ td.sm{text-align:left;color:#444;min-width:55px}
       {tab === "overview" && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-            <Stat icon={Users} label="Staff" value={nurses.length} />
-            <Stat icon={BarChart3} label="Wards" value={wards.length} />
+            <Stat icon={Users} label="Staff" value={scopedNurses.length} />
+            <Stat
+              icon={BarChart3}
+              label="Wards"
+              value={
+                reportFacility
+                  ? wards.filter((w) => w.facility === reportFacility).length
+                  : wards.length
+              }
+            />
             <Stat icon={Clock} label="Shift Hours (period)" value={totalLoggedHours.toFixed(1)} />
             <Stat
               icon={Stethoscope}
@@ -1110,12 +1136,12 @@ td.sm{text-align:left;color:#444;min-width:55px}
         <div className="space-y-4">
           {/* Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-            <Stat icon={Stethoscope} label="Shifts Filled" value={locumFilledRequests.length} />
+            <Stat icon={Stethoscope} label="Shifts Filled" value={scopedLocumRequests.length} />
             <Stat icon={Clock} label="Total Hours" value={totalLocumHours.toFixed(1)} />
             <Stat
               icon={Users}
               label="Nurses Used"
-              value={new Set(locumFilledRequests.map((r) => r.accepted_by_nurse_id)).size}
+              value={new Set(scopedLocumRequests.map((r) => r.accepted_by_nurse_id)).size}
             />
           </div>
 
@@ -1129,7 +1155,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
             </button>
           </div>
 
-          {locumFilledRequests.length === 0 ? (
+          {scopedLocumRequests.length === 0 ? (
             <EmptyState
               icon={<Stethoscope className="h-6 w-6" />}
               title="No locum shifts filled yet"
@@ -1145,7 +1171,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     .sort((a, b) => b[1] - a[1])
                     .map(([nurseId, hrs]) => {
                       const name =
-                        locumFilledRequests.find((r) => r.accepted_by_nurse_id === nurseId)
+                        scopedLocumRequests.find((r) => r.accepted_by_nurse_id === nurseId)
                           ?.accepted_by_nurse_name ?? "Unknown";
                       const shifts = locumShiftCountMap.get(nurseId) ?? 0;
                       return (
@@ -1185,7 +1211,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     </tr>
                   </thead>
                   <tbody>
-                    {locumFilledRequests.map((r) => {
+                    {scopedLocumRequests.map((r) => {
                       const log = r.accepted_by_nurse_id
                         ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
                         : undefined;
@@ -1455,23 +1481,29 @@ td.sm{text-align:left;color:#444;min-width:55px}
       {/* ── Staff Directory ───────────────────────────────────────────────── */}
       {tab === "staff-dir" && (
         <div className="space-y-5">
-          {/* Facility selector */}
+          {/* Facility selector — hidden when role is locked to a single facility */}
           <div className="flex items-center gap-2 flex-wrap">
             <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-            {FACILITIES.map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setDirFacility(f)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                  dirFacility === f
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card hover:bg-muted border-border"
-                }`}
-              >
-                {f}
-              </button>
-            ))}
+            {reportFacility ? (
+              <span className="px-4 py-1.5 rounded-full text-sm font-medium border bg-primary text-primary-foreground border-primary">
+                {reportFacility}
+              </span>
+            ) : (
+              FACILITIES.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setDirFacility(f)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                    dirFacility === f
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card hover:bg-muted border-border"
+                  }`}
+                >
+                  {f}
+                </button>
+              ))
+            )}
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
@@ -1559,34 +1591,42 @@ td.sm{text-align:left;color:#444;min-width:55px}
       {/* ── Schedule Archive ──────────────────────────────────────────────── */}
       {tab === "schedules" && (
         <div className="space-y-5">
-          {/* Facility filter */}
+          {/* Facility filter — locked pill for facility-scoped roles */}
           <div className="flex items-center gap-2 flex-wrap">
             <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-            <button
-              type="button"
-              onClick={() => setArchiveFacility("")}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                archiveFacility === ""
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-card hover:bg-muted border-border"
-              }`}
-            >
-              All Facilities
-            </button>
-            {FACILITIES.map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setArchiveFacility(f)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                  archiveFacility === f
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card hover:bg-muted border-border"
-                }`}
-              >
-                {f}
-              </button>
-            ))}
+            {reportFacility ? (
+              <span className="px-4 py-1.5 rounded-full text-sm font-medium border bg-primary text-primary-foreground border-primary">
+                {reportFacility}
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setArchiveFacility("")}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                    archiveFacility === ""
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card hover:bg-muted border-border"
+                  }`}
+                >
+                  All Facilities
+                </button>
+                {FACILITIES.map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setArchiveFacility(f)}
+                    className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                      archiveFacility === f
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-card hover:bg-muted border-border"
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </>
+            )}
           </div>
 
           {archiveLoading ? (

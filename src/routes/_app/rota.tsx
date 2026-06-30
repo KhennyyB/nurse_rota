@@ -551,7 +551,12 @@ function RotaPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    setGenForm({ startDate: ymd(startDate), facility: "", ward: "", rotateInterns: true });
+    setGenForm({
+      startDate: ymd(startDate),
+      facility: lockedFacility ?? "",
+      ward: "",
+      rotateInterns: true,
+    });
     setGenOpen(true);
   }
 
@@ -1606,20 +1611,26 @@ function RotaPage() {
 
             {/* Facility */}
             <div>
-              <label className="block text-sm font-medium mb-1.5">
-                Facility <span className="text-destructive">*</span>
-              </label>
-              <select
-                title="Facility"
-                value={genForm.facility}
-                onChange={(e) => setGenForm((f) => ({ ...f, facility: e.target.value, ward: "" }))}
-                className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="">Select facility…</option>
-                {FACILITIES.map((f) => (
-                  <option key={f}>{f}</option>
-                ))}
-              </select>
+              <label className="block text-sm font-medium mb-1.5">Facility</label>
+              {lockedFacility ? (
+                <p className="h-9 flex items-center px-3 rounded-md border bg-muted text-sm font-medium text-muted-foreground">
+                  {lockedFacility}
+                </p>
+              ) : (
+                <select
+                  title="Facility"
+                  value={genForm.facility}
+                  onChange={(e) =>
+                    setGenForm((f) => ({ ...f, facility: e.target.value, ward: "" }))
+                  }
+                  className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">Select facility…</option>
+                  {FACILITIES.map((f) => (
+                    <option key={f}>{f}</option>
+                  ))}
+                </select>
+              )}
             </div>
 
             {/* Ward */}
