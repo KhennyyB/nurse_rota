@@ -477,7 +477,9 @@ function ShiftPage() {
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
-  const isSchedulePublished = assignment?.status === "published";
+  // Check published status directly from the DB-backed sources — never the matron fallback,
+  // which has status:"published" hardcoded and would otherwise bypass the published gate.
+  const isSchedulePublished = !!(locumAssignment ?? queryAssignment);
   const hasShiftToday = assignment && (assignment.shift === "M" || assignment.shift === "N");
   const isActive = shiftLog && !shiftLog.ended_at;
   const isEnded = shiftLog && !!shiftLog.ended_at;

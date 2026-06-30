@@ -380,7 +380,9 @@ function NurseDashboard() {
                   Active — {elapsedH}h {elapsedM}m elapsed ({elapsedTotalMinutes}m)
                 </div>
               )}
-              {!activeLog && (todayAssignment.shift === "M" || todayAssignment.shift === "N") && (
+              {!activeLog &&
+                todayAssignment.status === "published" &&
+                (todayAssignment.shift === "M" || todayAssignment.shift === "N") && (
                 <Link
                   to="/shift"
                   className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
