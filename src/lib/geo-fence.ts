@@ -10,8 +10,10 @@ export const FACILITY_LOCATIONS: Record<string, { lat: number; lng: number; labe
   Ligali: [{ lat: 6.428565, lng: 3.44097, label: "Ligali — 3B Ligali Ayorinde Street" }],
 };
 
-// Nurses must be within this distance of any facility to clock in.
-export const GEO_FENCE_RADIUS_M = 50000;
+// Nurses must be within this distance of their own facility to clock in.
+// 500 m keeps each facility isolated — the closest pair (Ikoyi / Ligali) are ~2.9 km apart,
+// and the two Ikeja campuses are ~1.2 km apart (nearestLocation picks the closer one).
+export const GEO_FENCE_RADIUS_M = 500;
 
 function haversineMetres(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6_371_000;
