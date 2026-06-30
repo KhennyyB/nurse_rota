@@ -160,6 +160,12 @@ function RotaPage() {
   const [selectedRole, setSelectedRole] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Effective facility for filtering: locked value takes priority over the dropdown state.
+  // lockedFacility can resolve after mount (auth context loads async), so we can't rely
+  // on useState(lockedFacility ?? "") alone — the initial value may have been "" when
+  // nurseFacility was still null.
+  const effectiveFacility = lockedFacility ?? selectedFacility;
+
   // Generate dialog
   const [genOpen, setGenOpen] = useState(false);
   const [genForm, setGenForm] = useState<GenForm>({
@@ -398,11 +404,11 @@ function RotaPage() {
 
   // Unique role values scoped to the selected facility (for the role filter dropdown).
   const availableRoles = useMemo(() => {
-    const scoped = selectedFacility
-      ? nurses.filter((n) => n.facility === selectedFacility)
+    const scoped = effectiveFacility
+      ? nurses.filter((n) => n.facility === effectiveFacility)
       : nurses;
     return [...new Set(scoped.map((n) => n.role).filter(Boolean))].sort();
-  }, [nurses, selectedFacility]);
+  }, [nurses, effectiveFacility]);
 
   // View: nurses filtered by toolbar selects + search
   // For nurse role: derive which ward this user belongs to so we can lock the view.
@@ -413,7 +419,7 @@ function RotaPage() {
 
   const filteredNurses = useMemo(() => {
     let list = nurses;
-    if (selectedFacility) list = list.filter((n) => n.facility === selectedFacility);
+    if (effectiveFacility) list = list.filter((n) => n.facility === effectiveFacility);
     // Nurse role: always scope to their own ward. Otherwise use the ward dropdown.
     const effectiveWard = lockedWard ?? selectedWard;
     if (effectiveWard)
@@ -431,7 +437,7 @@ function RotaPage() {
     return list;
   }, [
     nurses,
-    selectedFacility,
+    effectiveFacility,
     lockedWard,
     selectedWard,
     selectedRole,
@@ -445,10 +451,10 @@ function RotaPage() {
   // (different shift configurations), and duplicates break the filter dropdown and
   // intern rotation cycle.
   const { data: facilityFilteredWards = [] } = useQuery<WardInput[]>({
-    queryKey: ["wards-by-facility", selectedFacility],
+    queryKey: ["wards-by-facility", effectiveFacility],
     queryFn: async () => {
       let q = supabase.from("wards").select("*").order("name");
-      if (selectedFacility) q = q.eq("facility", selectedFacility);
+      if (effectiveFacility) q = q.eq("facility", effectiveFacility);
       const rows = ((await q).data ?? []) as WardInput[];
       const seen = new Set<string>();
       return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
@@ -1037,7 +1043,7 @@ function RotaPage() {
       const submittedIdSet = new Set(ids);
       // Resolve the facility from the selected-facility filter or from a ward nurse.
       const facility =
-        selectedFacility ||
+        effectiveFacility ||
         nurses.find(
           (n) =>
             !isGlobalHead(n.role) &&
@@ -1065,7 +1071,7 @@ function RotaPage() {
     }
 
     setBusy(false);
-    const wardLabel = selectedWard || selectedFacility || "all wards";
+    const wardLabel = selectedWard || effectiveFacility || "all wards";
     await supabase.from("audit_logs").insert({
       actor_id: user?.id,
       actor_name: user?.email ?? null,
