@@ -192,6 +192,7 @@ function ApprovalsPage() {
   const {
     user,
     isAdmin,
+    activeRole,
     nurseFacility,
     canApproveChiefMatron,
     canApproveCno,
@@ -204,8 +205,11 @@ function ApprovalsPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [showAllPeriods, setShowAllPeriods] = useState(false);
 
-  // Non-admins are locked to their own facility.
-  const lockedFacility = !isAdmin && nurseFacility ? nurseFacility : null;
+  // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
+  const lockedFacility =
+    isAdmin || activeRole === "cno" || activeRole === "hr_admin"
+      ? null
+      : (nurseFacility ?? null);
   const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
   const canApproveChief = canApproveChiefMatron;

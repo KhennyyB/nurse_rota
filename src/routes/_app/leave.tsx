@@ -986,8 +986,11 @@ function splitWards(ward: string | null | undefined): string[] {
 }
 
 function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
-  const { user, fullName } = useAuth();
+  const { user, fullName, nurseFacility, isAdmin } = useAuth();
   const qc = useQueryClient();
+
+  // Admin sees all facilities; all other roles are locked to their own.
+  const lockedFacility: string | null = isAdmin ? null : (nurseFacility ?? null);
 
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-switch"],
@@ -996,7 +999,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   });
 
   const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
-  const [facility, setFacility] = useState("");
+  const [facility, setFacility] = useState(lockedFacility ?? "");
   const [nurseAId, setNurseAId] = useState("");
   const [nurseBId, setNurseBId] = useState("");
   const [wardB, setWardB] = useState("");
@@ -1120,27 +1123,35 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <label htmlFor="sw-facility" className="text-sm font-medium">
             Facility <span className="text-destructive">*</span>
           </label>
-          <select
-            id="sw-facility"
-            required
-            value={facility}
-            onChange={(e) => {
-              setFacility(e.target.value);
-              setNurseAId("");
-              setNurseBId("");
-              setWardB("");
-              setShiftA("");
-              setShiftB("");
-            }}
-            className={inputCls}
-          >
-            <option value="">Select facility…</option>
-            {SWITCH_FACILITIES.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+          {lockedFacility ? (
+            <div
+              className={`${inputCls} flex items-center bg-muted text-muted-foreground cursor-not-allowed`}
+            >
+              {lockedFacility}
+            </div>
+          ) : (
+            <select
+              id="sw-facility"
+              required
+              value={facility}
+              onChange={(e) => {
+                setFacility(e.target.value);
+                setNurseAId("");
+                setNurseBId("");
+                setWardB("");
+                setShiftA("");
+                setShiftB("");
+              }}
+              className={inputCls}
+            >
+              <option value="">Select facility…</option>
+              {SWITCH_FACILITIES.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* Date */}
