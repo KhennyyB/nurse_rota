@@ -528,7 +528,7 @@ function LeaveTable({
                     </span>
                     {l.review_note && (
                       <p
-                        className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-[200px]"
+                        className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-50"
                         title={l.review_note}
                       >
                         {l.review_note}
@@ -699,7 +699,7 @@ function SwitchTable({
                         "—"
                       )}
                     </td>
-                    <td className="px-4 py-3 max-w-[180px]">
+                    <td className="px-4 py-3 max-w-45">
                       {sw?.note && (
                         <p className="text-xs text-muted-foreground truncate" title={sw.note}>
                           {sw.note}
