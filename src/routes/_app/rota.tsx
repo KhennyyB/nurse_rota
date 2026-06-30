@@ -148,8 +148,9 @@ function RotaPage() {
   const canSubmit = canSubmitApproval;
   const qc = useQueryClient();
 
-  // Non-admin nurses are locked to their own facility.
-  const lockedFacility = !isAdmin && nurseFacility ? nurseFacility : null;
+  // Only admin and CNO can switch facilities; everyone else is locked to their own.
+  const canFilterFacility = activeRole === "admin" || activeRole === "cno";
+  const lockedFacility = !canFilterFacility && nurseFacility ? nurseFacility : null;
 
   // View state
   const [busy, setBusy] = useState(false);
@@ -395,11 +396,13 @@ function RotaPage() {
     return assignments.some((a) => facilityInternIds.has(a.nurse_id));
   }, [assignments, nurses, genForm.facility]);
 
-  // Unique role values derived from the loaded nurses list (for the role filter dropdown).
-  const availableRoles = useMemo(
-    () => [...new Set(nurses.map((n) => n.role).filter(Boolean))].sort(),
-    [nurses],
-  );
+  // Unique role values scoped to the selected facility (for the role filter dropdown).
+  const availableRoles = useMemo(() => {
+    const scoped = selectedFacility
+      ? nurses.filter((n) => n.facility === selectedFacility)
+      : nurses;
+    return [...new Set(scoped.map((n) => n.role).filter(Boolean))].sort();
+  }, [nurses, selectedFacility]);
 
   // View: nurses filtered by toolbar selects + search
   // For nurse role: derive which ward this user belongs to so we can lock the view.
@@ -1172,6 +1175,7 @@ function RotaPage() {
             onChange={(e) => {
               setSelectedFacility(e.target.value);
               setSelectedWard("");
+              setSelectedRole("");
             }}
             className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
           >
