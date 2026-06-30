@@ -223,7 +223,9 @@ function LocumPage() {
     queryFn: async () => {
       const { data } = await supabase
         .from("shift_logs")
-        .select("nurse_id, shift_date, hours_logged, started_at, ended_at")
+        .select(
+          "nurse_id, shift_date, hours_logged, started_at, ended_at, is_late, late_minutes, late_reason",
+        )
         .eq("is_locum", true)
         .order("shift_date", { ascending: false });
       return (data ?? []) as {
@@ -232,6 +234,9 @@ function LocumPage() {
         hours_logged: number | null;
         started_at: string;
         ended_at: string | null;
+        is_late: boolean;
+        late_minutes: number | null;
+        late_reason: string | null;
       }[];
     },
   });
@@ -942,6 +947,9 @@ function LocumHistoryView({
     hours_logged: number | null;
     started_at: string;
     ended_at: string | null;
+    is_late: boolean;
+    late_minutes: number | null;
+    late_reason: string | null;
   }[];
   loading: boolean;
 }) {
@@ -1007,6 +1015,7 @@ function LocumHistoryView({
               <th className="text-left px-4 py-2.5">Facility</th>
               <th className="text-center px-4 py-2.5">Shift</th>
               <th className="text-center px-4 py-2.5">Hours</th>
+              <th className="text-left px-4 py-2.5">Late</th>
               <th className="text-center px-4 py-2.5">Status</th>
             </tr>
           </thead>
@@ -1037,6 +1046,23 @@ function LocumHistoryView({
                   </td>
                   <td className="px-4 py-2.5 text-center text-xs font-semibold">
                     {log?.hours_logged != null ? fmtH(log.hours_logged) : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs">
+                    {log?.is_late ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
+                        title={log.late_reason ?? undefined}
+                      >
+                        {log.late_minutes}m late
+                        {log.late_reason && (
+                          <span className="hidden sm:inline text-amber-600 max-w-[140px] truncate">
+                            — {log.late_reason}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-center">
                     {!log ? (

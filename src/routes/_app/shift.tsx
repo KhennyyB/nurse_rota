@@ -290,8 +290,9 @@ function ShiftPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now]);
 
-  // Management roles see all nurses' shift hours; regular nurses see personal tracker.
-  if (activeRole && activeRole !== "nurse") {
+  // Only CNO, HR/Admin and System Admin see the all-nurses management view.
+  // Chief Matron and Head Nurse work regular shifts so they get the personal tracker.
+  if (activeRole && ["admin", "cno", "hr_admin"].includes(activeRole)) {
     return <AllNursesShiftView />;
   }
 

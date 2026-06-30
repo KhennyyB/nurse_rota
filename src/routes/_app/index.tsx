@@ -625,15 +625,12 @@ function ManagementDashboard() {
       </div>
 
       {/* Quick links for management */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {[
           { to: "/rota", icon: CalendarDays, label: "View Rota" },
           { to: "/staff", icon: Users, label: "Manage Staff" },
           { to: "/reports", icon: TrendingUp, label: "Reports" },
-          { to: "/shift", icon: Timer, label: "My Shift", show: activeRole === "head_nurse" },
-        ]
-          .filter((l) => l.show !== false)
-          .map(({ to, icon: Icon, label }) => (
+        ].map(({ to, icon: Icon, label }) => (
             <Link
               key={to}
               to={to}
@@ -653,8 +650,9 @@ function ManagementDashboard() {
 function Dashboard() {
   const { activeRole, nurseId } = useAuth();
 
-  // Regular nurses get a personal view; all management roles get the ops view
-  if (activeRole === "nurse" && nurseId) {
+  // Nurses, Chief Matrons and Head Nurses work shifts — give them the personal view.
+  // Only CNO, HR/Admin and System Admin get the ops management view.
+  if (activeRole && ["nurse", "chief_matron", "head_nurse"].includes(activeRole) && nurseId) {
     return <NurseDashboard />;
   }
 

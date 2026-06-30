@@ -148,16 +148,20 @@ const DEFAULT_CAPABILITIES: Capability[] = [
 ];
 
 const STORAGE_KEY = "nurse_rota_capabilities";
+const CAPABILITIES_CHANGED_EVENT = "capabilities-changed";
+
+function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capability[] {
+  return DEFAULT_CAPABILITIES.map((cap) => {
+    const found = saved.find((s) => s.key === cap.key);
+    return found ? { ...cap, roles: found.roles } : cap;
+  });
+}
 
 function loadCapabilities(): Capability[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_CAPABILITIES;
-    const saved = JSON.parse(raw) as { key: string; roles: AppRole[] }[];
-    return DEFAULT_CAPABILITIES.map((cap) => {
-      const found = saved.find((s) => s.key === cap.key);
-      return found ? { ...cap, roles: found.roles } : cap;
-    });
+    return mergeCapabilities(JSON.parse(raw) as { key: string; roles: AppRole[] }[]);
   } catch {
     return DEFAULT_CAPABILITIES;
   }
@@ -173,10 +177,28 @@ function PermissionsPage() {
   const [capabilities, setCapabilities] = useState<Capability[]>(loadCapabilities);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Capability[]>([]);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
+
+  // Sync authoritative values from DB on mount (overrides any stale localStorage cache)
+  useEffect(() => {
+    supabase
+      .from("portal_settings")
+      .select("value")
+      .eq("key", "capabilities")
+      .single()
+      .then(({ data }) => {
+        if (data?.value) {
+          const saved = data.value as { key: string; roles: AppRole[] }[];
+          const merged = mergeCapabilities(saved);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+          setCapabilities(merged);
+        }
+      });
+  }, []);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["permissions-users"],
@@ -226,19 +248,37 @@ function PermissionsPage() {
     setEditing(false);
   }
 
-  function saveEdit() {
+  async function saveEdit() {
+    const payload = draft.map((c) => ({ key: c.key, roles: c.roles }));
+    setSaving(true);
+    const { error } = await supabase
+      .from("portal_settings")
+      .upsert({ key: "capabilities", value: payload });
+    setSaving(false);
+    if (error) {
+      toast.error("Failed to save: " + error.message);
+      return;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
     setCapabilities(draft);
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(draft.map((c) => ({ key: c.key, roles: c.roles }))),
-    );
     setEditing(false);
     toast.success("Permissions saved");
   }
 
-  function resetDefaults() {
+  async function resetDefaults() {
     if (!confirm("Reset all capabilities to system defaults?")) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("portal_settings")
+      .upsert({ key: "capabilities", value: [] });
+    setSaving(false);
+    if (error) {
+      toast.error("Failed to reset: " + error.message);
+      return;
+    }
     localStorage.removeItem(STORAGE_KEY);
+    window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
     setCapabilities(DEFAULT_CAPABILITIES);
     setDraft([]);
     setEditing(false);
@@ -285,16 +325,18 @@ function PermissionsPage() {
                 <button
                   type="button"
                   onClick={cancelEdit}
-                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                  disabled={saving}
+                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={saveEdit}
-                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium"
+                  disabled={saving}
+                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
                 >
-                  Save changes
+                  {saving ? "Saving…" : "Save changes"}
                 </button>
               </>
             ) : (
@@ -302,8 +344,9 @@ function PermissionsPage() {
                 <button
                   type="button"
                   onClick={resetDefaults}
+                  disabled={saving}
                   title="Reset to defaults"
-                  className="h-8 w-8 grid place-items-center rounded-md border bg-card hover:bg-muted text-muted-foreground"
+                  className="h-8 w-8 grid place-items-center rounded-md border bg-card hover:bg-muted text-muted-foreground disabled:opacity-50"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                 </button>

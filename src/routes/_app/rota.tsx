@@ -1491,7 +1491,7 @@ function RotaPage() {
                               "block w-full text-[10px] font-bold py-1.5 rounded border transition",
                               cell
                                 ? isLocum
-                                  ? "bg-violet-100 text-violet-900 border-violet-300"
+                                  ? "bg-black text-white border-black"
                                   : shiftStyles[cell.shift]
                                 : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
                               isDragOver && !isWindowLocked && "ring-2 ring-primary scale-105",
@@ -1512,7 +1512,7 @@ function RotaPage() {
                                   : "View only"
                             }
                           >
-                            {cell ? (isLocum ? `L·${cell.shift}` : cell.shift) : "—"}
+                            {cell ? (isLocum ? "LO" : cell.shift) : "—"}
                           </button>
                         </td>
                       );

@@ -597,6 +597,9 @@ function ReportsPage() {
             ? "In Progress"
             : "Not Started",
         "Hours Logged": log?.hours_logged != null ? Number(log.hours_logged).toFixed(2) : "",
+        Late: log?.is_late ? "Yes" : "No",
+        "Late (mins)": log?.late_minutes ?? "",
+        "Late Reason": log?.late_reason ?? "",
         "Accepted At": r.accepted_at ? new Date(r.accepted_at).toLocaleString("en-GB") : "",
       };
     });
@@ -1117,6 +1120,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       <th className="text-left px-4 py-3 font-semibold">Started</th>
                       <th className="text-left px-4 py-3 font-semibold">Ended</th>
                       <th className="text-right px-4 py-3 font-semibold">Hours</th>
+                      <th className="text-left px-4 py-3 font-semibold">Late</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1165,6 +1169,24 @@ td.sm{text-align:left;color:#444;min-width:55px}
                             {log?.hours_logged != null
                               ? fmtHoursLog(Number(log.hours_logged))
                               : "—"}
+                          </td>
+                          <td className="px-4 py-3">
+                            {log?.is_late ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
+                                title={log.late_reason ?? undefined}
+                              >
+                                <Clock className="h-3 w-3" />
+                                {log.late_minutes}m late
+                                {log.late_reason && (
+                                  <span className="hidden sm:inline text-amber-600 max-w-[120px] truncate">
+                                    — {log.late_reason}
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
                           </td>
                         </tr>
                       );

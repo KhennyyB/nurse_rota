@@ -58,6 +58,8 @@ export function rememberSelectedRole(uid: string, role: AppRole) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  // Incremented whenever capabilities change so can* values are recomputed.
+  const [capabilitiesVersion, setCapabilitiesVersion] = useState(0);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [activeRole, setActiveRole] = useState<AppRole | null>(null);
   const [fullName, setFullName] = useState<string | null>(null);
@@ -92,6 +94,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => subscription.unsubscribe();
+  }, []);
+
+  // Pull capability overrides from DB once on mount so every device gets the admin's settings.
+  useEffect(() => {
+    supabase
+      .from("portal_settings")
+      .select("value")
+      .eq("key", "capabilities")
+      .single()
+      .then(({ data }) => {
+        if (data?.value) {
+          localStorage.setItem(
+            CAPABILITIES_KEY,
+            JSON.stringify(data.value as { key: string; roles: AppRole[] }[]),
+          );
+          setCapabilitiesVersion((v) => v + 1);
+        }
+      });
+  }, []);
+
+  // Re-read capabilities from localStorage whenever the permissions page fires a save event.
+  useEffect(() => {
+    const handler = () => setCapabilitiesVersion((v) => v + 1);
+    window.addEventListener("capabilities-changed", handler);
+    return () => window.removeEventListener("capabilities-changed", handler);
   }, []);
 
   async function loadProfile(uid: string) {
@@ -155,6 +182,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const ar = activeRole;
+  // capabilitiesVersion read here so a change triggers recomputation of can* flags below.
+  void capabilitiesVersion;
   const hasRole = (r: AppRole) => ar === r;
   const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
   const isInActiveRole = (...rs: AppRole[]) => ar !== null && rs.includes(ar);
@@ -222,7 +251,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "System Administrator",
   cno: "Chief Nursing Officer",
   chief_matron: "Chief Matron",
-  head_nurse: "Coverage Nurse",
+  head_nurse: "Head Nurse",
   hr_admin: "HR / Admin",
   nurse: "Nurse",
 };
