@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   CalendarDays,
   CheckCircle2,
   Clock,
@@ -42,6 +43,10 @@ type ShiftLog = {
   late_minutes: number | null;
   late_reason: string | null;
   is_locum: boolean;
+  is_leave: boolean;
+  leave_request_id: string | null;
+  is_swap: boolean;
+  swap_note: string | null;
 };
 
 type Assignment = {
@@ -193,6 +198,7 @@ function ShiftPage() {
         .from("shift_logs")
         .select("*")
         .eq("nurse_id", nurseId!)
+        .eq("is_leave", false)
         .or(`ended_at.is.null,shift_date.eq.${today}`)
         .order("started_at", { ascending: false })
         .limit(1)
@@ -223,6 +229,35 @@ function ShiftPage() {
         .eq("status", "filled")
         .maybeSingle();
       return data as { id: string; shift: "M" | "N"; ward: string; facility: string } | null;
+    },
+  });
+
+  // Detect if today is a swap coverage shift (nurse is Nurse B in an approved swap request).
+  // The reason field encodes: SHIFT_SWITCH|{nurseBId}|{nurseBName}|{shiftA}|{shiftB}|...
+  const { data: todaySwap } = useQuery<{
+    requestId: string;
+    nurseAName: string;
+    shiftType: "M" | "N";
+  } | null>({
+    queryKey: ["my-swap-today", nurseId, today],
+    enabled: !!nurseId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("leave_requests")
+        .select("id, nurse_name, reason")
+        .eq("status", "Approved")
+        .eq("from_date", today)
+        .eq("type", "Swap")
+        .like("reason", `SHIFT_SWITCH|${nurseId}|%`);
+      if (!data?.length) return null;
+      const row = data[0];
+      const parts = (row.reason ?? "").slice("SHIFT_SWITCH|".length).split("|");
+      const shiftA = parts[2] ?? "";
+      return {
+        requestId: row.id,
+        nurseAName: row.nurse_name,
+        shiftType: (shiftA === "M" ? "M" : "N") as "M" | "N",
+      };
     },
   });
 
@@ -279,6 +314,12 @@ function ShiftPage() {
   });
 
   const currentPeriodHours = currentPeriodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const swapPeriodHours = currentPeriodLogs
+    .filter((l) => l.is_swap)
+    .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const leavePeriodHours = currentPeriodLogs
+    .filter((l) => l.is_leave)
+    .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
 
   // ── Auto-end: check every minute whether the shift's expected end has passed ──
   useEffect(() => {
@@ -356,6 +397,10 @@ function ShiftPage() {
       ip_address: geo?.ip ?? null,
       is_locum: !!todayLocum,
       locum_request_id: todayLocum?.id ?? null,
+      is_swap: !!todaySwap,
+      swap_note: todaySwap
+        ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
+        : null,
     });
 
     if (error) return toast.error(error.message);
@@ -470,6 +515,11 @@ function ShiftPage() {
                 {todayLocum && (
                   <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
                     Bank Shift (Locum)
+                  </span>
+                )}
+                {todaySwap && (
+                  <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 border border-sky-200">
+                    <ArrowLeftRight className="h-3 w-3" /> Swap Coverage
                   </span>
                 )}
               </p>
@@ -708,6 +758,21 @@ function ShiftPage() {
           <p className="text-xs text-muted-foreground mt-1">
             {currentPeriodLogs.filter((l) => l.ended_at).length} shifts completed
           </p>
+          {(swapPeriodHours > 0 || leavePeriodHours > 0) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {swapPeriodHours > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
+                  <ArrowLeftRight className="h-2.5 w-2.5" />
+                  {fmtHours(swapPeriodHours)} swap
+                </span>
+              )}
+              {leavePeriodHours > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                  {fmtHours(leavePeriodHours)} leave
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="bg-card border rounded-xl p-5 shadow-soft">
           <div className="flex items-center gap-2 mb-2 text-muted-foreground">
@@ -761,8 +826,18 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
                 {log.shift_type}
               </span>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-medium">{log.shift_date}</p>
+                  {log.is_leave && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                      Leave (credited)
+                    </span>
+                  )}
+                  {log.is_swap && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-100 border border-sky-200 px-1.5 py-0.5 rounded-full">
+                      <ArrowLeftRight className="h-2.5 w-2.5" /> Swap
+                    </span>
+                  )}
                   {log.is_late && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
                       <AlertTriangle className="h-2.5 w-2.5" />
@@ -773,6 +848,9 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
                 <p className="text-xs text-muted-foreground">
                   {fmtTime(log.started_at)} → {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
                 </p>
+                {log.is_swap && log.swap_note && (
+                  <p className="text-xs text-sky-700 mt-0.5 italic">{log.swap_note}</p>
+                )}
                 {log.is_late && log.late_reason && (
                   <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
                 )}

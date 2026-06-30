@@ -274,6 +274,10 @@ export type Database = {
           ip_address: string | null;
           is_locum: boolean;
           locum_request_id: string | null;
+          is_leave: boolean;
+          leave_request_id: string | null;
+          is_swap: boolean;
+          swap_note: string | null;
         };
         Insert: {
           id?: string;
@@ -294,6 +298,10 @@ export type Database = {
           ip_address?: string | null;
           is_locum?: boolean;
           locum_request_id?: string | null;
+          is_leave?: boolean;
+          leave_request_id?: string | null;
+          is_swap?: boolean;
+          swap_note?: string | null;
         };
         Update: {
           id?: string;
@@ -314,6 +322,10 @@ export type Database = {
           ip_address?: string | null;
           is_locum?: boolean;
           locum_request_id?: string | null;
+          is_leave?: boolean;
+          leave_request_id?: string | null;
+          is_swap?: boolean;
+          swap_note?: string | null;
         };
         Relationships: [
           {

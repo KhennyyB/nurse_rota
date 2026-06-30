@@ -90,6 +90,40 @@ function LeavePage() {
   const switchRows = rows.filter((r) => isShiftSwitch(r));
   const activeRows = activeTab === "leave" ? leaveRows : switchRows;
 
+  // Standard credited hours per shift type (matches official shift windows).
+  const LEAVE_SHIFT_HOURS: Record<"M" | "N", number> = { M: 9, N: 15 };
+
+  function buildLeaveShiftLog(
+    nurseId: string,
+    leaveId: string,
+    shiftDate: string,
+    shift: "M" | "N",
+  ) {
+    const startH = shift === "M" ? 8 : 17;
+    const startedAt = new Date(`${shiftDate}T00:00:00`);
+    startedAt.setHours(startH, 0, 0, 0);
+    const endedAt = new Date(startedAt);
+    if (shift === "M") {
+      endedAt.setHours(17, 0, 0, 0);
+    } else {
+      endedAt.setDate(endedAt.getDate() + 1);
+      endedAt.setHours(8, 0, 0, 0);
+    }
+    return {
+      nurse_id: nurseId,
+      shift_date: shiftDate,
+      shift_type: shift as "M" | "N",
+      started_at: startedAt.toISOString(),
+      ended_at: endedAt.toISOString(),
+      expected_end_at: endedAt.toISOString(),
+      hours_logged: LEAVE_SHIFT_HOURS[shift],
+      period_start: shiftDate,
+      is_late: false,
+      is_leave: true,
+      leave_request_id: leaveId,
+    };
+  }
+
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
     if (status === "Approved" && l.nurse_id) {
       // Fetch only working (M/N) locked assignments — these are the shifts that need cover.
@@ -109,6 +143,39 @@ function LeavePage() {
             supabase.from("shift_assignments").update({ shift: "LEAVE" }).eq("id", s.id),
           ),
         );
+
+        // Credit standard hours for each leave shift so the nurse's total is unaffected.
+        // Skip dates that already have a shift_log (nurse clocked in before leave was approved).
+        const { data: existingLogs } = await supabase
+          .from("shift_logs")
+          .select("shift_date")
+          .eq("nurse_id", l.nurse_id)
+          .in(
+            "shift_date",
+            publishedShifts.map((s) => s.shift_date),
+          );
+        const alreadyLogged = new Set(existingLogs?.map((e) => e.shift_date) ?? []);
+        const shiftsToCredit = publishedShifts.filter(
+          (s) => !alreadyLogged.has(s.shift_date) && (s.shift === "M" || s.shift === "N"),
+        );
+
+        if (shiftsToCredit.length > 0) {
+          await supabase
+            .from("shift_logs")
+            .insert(
+              shiftsToCredit.map((s) =>
+                buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N"),
+              ),
+            );
+          const totalHours = shiftsToCredit.reduce(
+            (sum, s) => sum + (LEAVE_SHIFT_HOURS[s.shift as "M" | "N"] ?? 0),
+            0,
+          );
+          await supabase.rpc("increment_nurse_hours", {
+            p_nurse_id: l.nurse_id,
+            p_hours: totalHours,
+          });
+        }
 
         const { error } = await supabase
           .from("leave_requests")

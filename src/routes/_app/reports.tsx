@@ -64,6 +64,9 @@ type ShiftLog = {
   late_minutes: number | null;
   late_reason: string | null;
   is_locum: boolean;
+  is_swap: boolean;
+  swap_note: string | null;
+  is_leave: boolean;
 };
 type LocumFilledRequest = {
   id: string;
@@ -331,17 +334,29 @@ function ReportsPage() {
     enabled: tab === "schedules",
   });
 
-  // Build per-nurse hours for current period (regular shifts only — locum excluded)
-  const { nurseHoursMap, nurseShiftCountMap } = useMemo(() => {
+  // Build per-nurse hours for current period (regular + swap + leave; locum excluded).
+  // swapHoursMap and leaveHoursMap allow breakdown display without excluding from total.
+  const { nurseHoursMap, nurseShiftCountMap, swapHoursMap, leaveHoursMap } = useMemo(() => {
     const hours = new Map<string, number>();
     const shifts = new Map<string, number>();
+    const swap = new Map<string, number>();
+    const leave = new Map<string, number>();
     for (const log of shiftLogs) {
       if (log.hours_logged != null) {
         hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
         shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
+        if (log.is_swap)
+          swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + log.hours_logged);
+        if (log.is_leave)
+          leave.set(log.nurse_id, (leave.get(log.nurse_id) ?? 0) + log.hours_logged);
       }
     }
-    return { nurseHoursMap: hours, nurseShiftCountMap: shifts };
+    return {
+      nurseHoursMap: hours,
+      nurseShiftCountMap: shifts,
+      swapHoursMap: swap,
+      leaveHoursMap: leave,
+    };
   }, [shiftLogs]);
 
   const totalLoggedHours = useMemo(
@@ -916,19 +931,37 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   .filter((n) => nurseHoursMap.has(n.id))
                   .map((n) => {
                     const hrs = nurseHoursMap.get(n.id) ?? 0;
+                    const swapH = swapHoursMap.get(n.id) ?? 0;
+                    const leaveH = leaveHoursMap.get(n.id) ?? 0;
                     const pct = Math.round((hrs / Math.max(n.target_hours, 1)) * 100);
                     return (
-                      <div key={n.id} className="flex items-center gap-3 text-sm">
-                        <div className="w-36 truncate font-medium">{n.name}</div>
-                        <div className="flex-1 h-5 rounded-full bg-muted overflow-hidden">
-                          <Progress
-                            value={Math.min(pct, 100)}
-                            className="h-full rounded-full bg-primary/70"
-                          />
+                      <div key={n.id} className="space-y-0.5">
+                        <div className="flex items-center gap-3 text-sm">
+                          <div className="w-36 truncate font-medium">{n.name}</div>
+                          <div className="flex-1 h-5 rounded-full bg-muted overflow-hidden">
+                            <Progress
+                              value={Math.min(pct, 100)}
+                              className="h-full rounded-full bg-primary/70"
+                            />
+                          </div>
+                          <div className="w-20 text-right tabular-nums text-muted-foreground text-xs">
+                            {hrs.toFixed(1)} / {n.target_hours} h
+                          </div>
                         </div>
-                        <div className="w-20 text-right tabular-nums text-muted-foreground text-xs">
-                          {hrs.toFixed(1)} / {n.target_hours} h
-                        </div>
+                        {(swapH > 0 || leaveH > 0) && (
+                          <div className="pl-[calc(9rem+0.75rem)] flex gap-2">
+                            {swapH > 0 && (
+                              <span className="text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
+                                {swapH.toFixed(1)}h swap
+                              </span>
+                            )}
+                            {leaveH > 0 && (
+                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                                {leaveH.toFixed(1)}h leave
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -972,6 +1005,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     <th className="text-left px-4 py-3 font-semibold">Nurse</th>
                     <th className="text-left px-4 py-3 font-semibold">Date</th>
                     <th className="text-left px-4 py-3 font-semibold">Shift</th>
+                    <th className="text-left px-4 py-3 font-semibold">Type</th>
                     <th className="text-left px-4 py-3 font-semibold">Started</th>
                     <th className="text-left px-4 py-3 font-semibold">Ended</th>
                     <th className="text-left px-4 py-3 font-semibold">Late</th>
@@ -994,6 +1028,22 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           >
                             {log.shift_type === "M" ? "Morning" : "Night"}
                           </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {log.is_swap ? (
+                            <span
+                              title={log.swap_note ?? undefined}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-full"
+                            >
+                              Swap
+                            </span>
+                          ) : log.is_leave ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                              Leave
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Regular</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 tabular-nums text-muted-foreground">
                           {log.started_at
