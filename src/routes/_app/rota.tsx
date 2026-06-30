@@ -414,7 +414,10 @@ function RotaPage() {
     // Nurse role: always scope to their own ward. Otherwise use the ward dropdown.
     const effectiveWard = lockedWard ?? selectedWard;
     if (effectiveWard)
-      list = list.filter((n) => isGlobalHead(n.role) || parseWards(n.ward).includes(effectiveWard));
+      list = list.filter(
+        (n) =>
+          isGlobalHead(n.role) || isMatron(n.role) || parseWards(n.ward).includes(effectiveWard),
+      );
     if (selectedRole) list = list.filter((n) => n.role === selectedRole);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -435,13 +438,17 @@ function RotaPage() {
   ]);
 
   // Wards filtered by facility — shared by both the toolbar and generate dialog.
-  // Queried directly from DB so duplicates / missing facility tags don't affect the list.
+  // Deduplicated by name since the wards table can have multiple rows per ward name
+  // (different shift configurations), and duplicates break the filter dropdown and
+  // intern rotation cycle.
   const { data: facilityFilteredWards = [] } = useQuery<WardInput[]>({
     queryKey: ["wards-by-facility", selectedFacility],
     queryFn: async () => {
       let q = supabase.from("wards").select("*").order("name");
       if (selectedFacility) q = q.eq("facility", selectedFacility);
-      return ((await q).data ?? []) as WardInput[];
+      const rows = ((await q).data ?? []) as WardInput[];
+      const seen = new Set<string>();
+      return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
     },
   });
 
@@ -454,7 +461,9 @@ function RotaPage() {
         // (older records may not have facility set yet).
         q = q.or(`facility.eq.${genForm.facility},facility.is.null`);
       }
-      return ((await q).data ?? []) as WardInput[];
+      const rows = ((await q).data ?? []) as WardInput[];
+      const seen = new Set<string>();
+      return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
     },
   });
 
@@ -1187,7 +1196,9 @@ function RotaPage() {
           >
             <option value="">All Wards</option>
             {facilityFilteredWards.map((w) => (
-              <option key={w.id}>{w.name}</option>
+              <option key={w.name} value={w.name}>
+                {w.name}
+              </option>
             ))}
           </select>
         )}
@@ -1422,6 +1433,7 @@ function RotaPage() {
                     </td>
                     <td className="px-2 py-2 text-muted-foreground text-xs">
                       {(() => {
+                        if (isGlobalHead(n.role) || isMatron(n.role)) return "—";
                         const ws = parseWards(n.ward);
                         if (!ws.length) return "—";
                         return (
