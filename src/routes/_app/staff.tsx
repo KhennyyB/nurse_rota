@@ -1215,7 +1215,7 @@ export function Modal({
 
 const LOGIN_ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: "nurse", label: "Nurse" },
-  { value: "head_nurse", label: "Coverage Nurse" },
+  { value: "head_nurse", label: "Head Nurse" },
   { value: "hr_admin", label: "HR / Admin" },
   { value: "chief_matron", label: "Chief Matron" },
   { value: "cno", label: "Chief Nursing Officer (CNO)" },
