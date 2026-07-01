@@ -1612,29 +1612,40 @@ function SendInvitesModal({
 }) {
   const [busy, setBusy] = useState(false);
 
-  // Fetch nurses on OFF duty for this date + facility
+  // Fetch nurses on OFF duty for this date + facility.
+  // We scope to the facility first (small list) then check assignments, rather than
+  // fetching all OFF assignments across every facility — the cross-facility approach
+  // builds an unbounded nurse_id array that can exceed Supabase's URL length limit
+  // and silently return empty results.
   const { data: offNurses, isLoading } = useQuery({
     queryKey: ["locum-off-nurses", request.shift_date, request.facility],
     queryFn: async () => {
-      // 1. Get nurse_ids with published OFF on this date
-      const { data: assignments } = await supabase
-        .from("shift_assignments")
-        .select("nurse_id")
-        .eq("shift_date", request.shift_date)
-        .eq("shift", "OFF")
-        .eq("status", "published");
-
-      const nurseIds = assignments?.map((a) => a.nurse_id) ?? [];
-      if (!nurseIds.length) return [] as OffNurse[];
-
-      // 2. Filter by facility
-      const { data: nurses } = await supabase
+      // 1. Get nurses at this facility
+      const { data: facilityNurses } = await supabase
         .from("nurses")
         .select("id, name")
-        .in("id", nurseIds)
         .eq("facility", request.facility);
 
-      if (!nurses?.length) return [] as OffNurse[];
+      const facilityIds = facilityNurses?.map((n) => n.id) ?? [];
+      if (!facilityIds.length) return [] as OffNurse[];
+
+      // 2. Of those nurses, find which ones have a published OFF on this date.
+      //    Batch in groups of 200 to stay well under PostgREST's URL limit.
+      const BATCH = 200;
+      const offIds = new Set<string>();
+      for (let i = 0; i < facilityIds.length; i += BATCH) {
+        const { data: assignments } = await supabase
+          .from("shift_assignments")
+          .select("nurse_id")
+          .eq("shift_date", request.shift_date)
+          .eq("shift", "OFF")
+          .eq("status", "published")
+          .in("nurse_id", facilityIds.slice(i, i + BATCH));
+        assignments?.forEach((a) => offIds.add(a.nurse_id));
+      }
+
+      const nurses = (facilityNurses ?? []).filter((n) => offIds.has(n.id));
+      if (!nurses.length) return [] as OffNurse[];
 
       // 3. Look up auth user IDs by matching name → profiles.full_name
       const names = nurses.map((n) => n.name);
