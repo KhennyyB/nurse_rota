@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
@@ -78,16 +78,44 @@ function LeavePage() {
   const { data: rows = [], isLoading } = useQuery({
     queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id, nurseId],
     queryFn: async () => {
-      let q = supabase.from("leave_requests").select("*").order("created_at", { ascending: false });
-      if (!canApproveLeave) {
-        // Show own requests + switch requests where this nurse is the counterpart (nurse B)
-        q = nurseId
-          ? q.or(`requested_by.eq.${user!.id},reason.like.${SWITCH_PREFIX}${nurseId}|%`)
-          : q.eq("requested_by", user!.id);
+      if (canApproveLeave) {
+        const { data, error } = await supabase
+          .from("leave_requests")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+        return data as LeaveRow[];
       }
-      const { data, error } = await q;
-      if (error) throw error;
-      return data as LeaveRow[];
+
+      // Two separate queries — .or() can't be used here because the SHIFT_SWITCH|
+      // sentinel contains "|" which PostgREST treats as a filter separator.
+      const [ownResult, switchResult] = await Promise.all([
+        supabase
+          .from("leave_requests")
+          .select("*")
+          .eq("requested_by", user!.id)
+          .order("created_at", { ascending: false }),
+        nurseId
+          ? supabase
+              .from("leave_requests")
+              .select("*")
+              .like("reason", `${SWITCH_PREFIX}${nurseId}|%`)
+              .order("created_at", { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (ownResult.error) throw ownResult.error;
+      if (switchResult.error) throw switchResult.error;
+
+      // Merge and deduplicate (nurse A sees their own request; nurse B sees the same row)
+      const seen = new Set<string>();
+      const merged: LeaveRow[] = [];
+      for (const row of [...(ownResult.data ?? []), ...(switchResult.data ?? [])]) {
+        if (!seen.has(row.id)) {
+          seen.add(row.id);
+          merged.push(row as LeaveRow);
+        }
+      }
+      return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
     },
   });
 
@@ -1016,15 +1044,47 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const allFacilityWards = [...new Set(facilityNurses.flatMap((n) => splitWards(n.ward)))].sort();
   const wardBOptions = allFacilityWards.filter((w) => !nurseAWards.includes(w));
 
-  const nurseBList = nurseAId
-    ? switchType === "inter-ward"
-      ? wardB
-        ? facilityNurses.filter((n) => n.id !== nurseAId && splitWards(n.ward).includes(wardB))
-        : []
-      : facilityNurses.filter(
-          (n) => n.id !== nurseAId && splitWards(n.ward).some((w) => nurseAWards.includes(w)),
-        )
-    : [];
+  const facilityNurseIds = useMemo(() => facilityNurses.map((n) => n.id), [facilityNurses]);
+
+  // When Nurse A is on leave, we only want to show Nurse B candidates who are OFF
+  // that day (the only nurses available to cover). Fetch published OFF assignments for
+  // the selected date scoped to this facility.
+  const { data: offDutyIds = [] } = useQuery({
+    queryKey: ["off-duty-nurses", date, facility],
+    enabled: shiftA === "LEAVE" && !!date && facilityNurseIds.length > 0,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shift_assignments")
+        .select("nurse_id")
+        .eq("shift_date", date)
+        .eq("shift", "OFF")
+        .eq("status", "published")
+        .in("nurse_id", facilityNurseIds);
+      return (data ?? []).map((r) => r.nurse_id as string);
+    },
+  });
+  const offDutyIdSet = useMemo(
+    () => new Set(offDutyIds),
+    [offDutyIds],
+  );
+
+  const nurseBList = useMemo(() => {
+    if (!nurseAId) return [];
+    const leaveFilter = (n: { id: string }) =>
+      shiftA !== "LEAVE" || offDutyIdSet.has(n.id);
+    if (switchType === "inter-ward") {
+      if (!wardB) return [];
+      return facilityNurses.filter(
+        (n) => n.id !== nurseAId && splitWards(n.ward).includes(wardB) && leaveFilter(n),
+      );
+    }
+    // Same-ward: if Nurse A has no ward (coverage nurse on leave), any OFF nurse can cover.
+    const inWard = (n: (typeof facilityNurses)[number]) =>
+      nurseAWards.length === 0
+        ? true
+        : splitWards(n.ward).some((w) => nurseAWards.includes(w));
+    return facilityNurses.filter((n) => n.id !== nurseAId && inWard(n) && leaveFilter(n));
+  }, [nurseAId, switchType, wardB, facilityNurses, nurseAWards, shiftA, offDutyIdSet]);
 
   async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
     if (!nurseId || !forDate) {
